@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="trail" gradientUnits="userSpaceOnUse" x1="0" y1="290" x2="0" y2="448">
+      <stop offset="0" stop-color="#26A69A" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#26A69A" stop-opacity="0.08"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(256 256) scale(1.12) translate(-256 -256)">
+  <g transform="translate(0 -22)">
+  <rect x="84" y="192" width="344" height="24" rx="12" fill="#F4F7F8"/>
+  <rect x="112" y="114" width="46" height="180" rx="12" fill="#26A69A"/>
+  <rect x="164" y="144" width="30" height="120" rx="10" fill="#26A69A"/>
+  <rect x="354" y="114" width="46" height="180" rx="12" fill="#26A69A"/>
+  <rect x="318" y="144" width="30" height="120" rx="10" fill="#26A69A"/>
+  <g stroke="url(#trail)" stroke-linecap="round">
+    <line x1="135" y1="314" x2="135" y2="444" stroke-width="30"/>
+    <line x1="179" y1="284" x2="179" y2="400" stroke-width="20"/>
+    <line x1="377" y1="314" x2="377" y2="444" stroke-width="30"/>
+    <line x1="333" y1="284" x2="333" y2="400" stroke-width="20"/>
+  </g>
+  </g>
+  </g>
+</svg>

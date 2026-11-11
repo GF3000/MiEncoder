@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "236424288575",
+    "project_id": "miencoder-7369",
+    "storage_bucket": "miencoder-7369.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:236424288575:android:8793e52849ca14e89cdb8a",
+        "android_client_info": {
+          "package_name": "gf3000.miencoder.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "236424288575-0su47lmbjk9krtqsg94loqkur8bcd69g.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "gf3000.miencoder.app",
+            "certificate_hash": "3c45a51be648c37eae89f5c2a6f8742f88a6b2ae"
+          }
+        },
+        {
+          "client_id": "236424288575-erg2ggkedjh5jn69cdbh72bfkg0g6puu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9jCHko2ZtZLbZURpcprHQGwvMntN_cBc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "236424288575-erg2ggkedjh5jn69cdbh72bfkg0g6puu.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

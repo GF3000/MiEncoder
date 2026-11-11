@@ -1,0 +1,9 @@
+# Material de terceros extraído de la app ADR: no se publica
+adr/apk/
+adr/www/
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+.idea/
+*.iml

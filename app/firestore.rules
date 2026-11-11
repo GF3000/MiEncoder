@@ -1,0 +1,11 @@
+rules_version = '2';
+
+// Cada entrenador solo puede leer y escribir sus propios datos:
+// users/{uid}/players, exercises, sets, sessions...
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}
