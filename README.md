@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo/icon-square.png" width="96" alt="Logo de MiEncoder">
+  <img src="app/assets/icon/icon-square.png" width="96" alt="Logo de MiEncoder">
 </p>
 
 # MiEncoder
@@ -59,8 +59,6 @@ proyecto de Firebase. Más detalles en [app/README.md](app/README.md).
 |---|---|
 | [`app/`](app/) | App Flutter: parser de tramas, modelos, análisis, BLE, base de datos local, sincronización y pantallas. |
 | [`adr/`](adr/) | [Especificación del protocolo BLE](adr/SPEC.md) del encoder y capturas de validación. |
-| [`logo/`](logo/) | Propuestas de logo e iconos. |
-
 ## Protocolo del encoder
 
 El encoder envía cada repetición como una notificación BLE de texto con el
