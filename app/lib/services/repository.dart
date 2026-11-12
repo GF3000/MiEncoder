@@ -214,8 +214,13 @@ class Repository {
 
   // ------------------------------------------------------------------ sesiones
 
-  Future<List<TrainingSession>> sessions() async =>
-      (await _live(_sessions)).map(TrainingSession.fromJson).toList();
+  /// [legacyLoss]: pérdida general para sesiones antiguas sin ella.
+  Future<List<TrainingSession>> sessions({
+    double legacyLoss = kDefaultSessionLoss,
+  }) async => [
+    for (final j in await _live(_sessions))
+      TrainingSession.fromJson(j, legacyLoss: legacyLoss),
+  ];
 
   Future<void> saveTrainingSession(TrainingSession s) =>
       _put(_sessions, s.id, s.toJson());

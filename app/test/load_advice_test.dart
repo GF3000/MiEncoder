@@ -19,6 +19,31 @@ EncoderFrame f(double mpv) => parseFrameText(
 void main() {
   const t = RmTarget(75, 80);
 
+  group('Pérdida de la sesión (JSON)', () {
+    test('«Sin límite» se distingue de heredar y sobrevive al JSON', () {
+      final s = TrainingSession(
+        id: 's',
+        name: 'S',
+        start: DateTime(2026),
+        lossGeneral: kNoLossLimit,
+      ).withLossTarget('squat', 15).withLossTarget('bench', kNoLossLimit);
+      final back = TrainingSession.fromJson(s.toJson());
+      expect(back.lossGeneral, kNoLossLimit);
+      expect(back.lossTargets, {'squat': 15, 'bench': kNoLossLimit});
+      expect(back.lossFor('squat'), 15);
+      expect(back.lossFor('bench'), kNoLossLimit);
+      expect(back.lossFor('row'), kNoLossLimit); // hereda la general
+    });
+
+    test('sesión antigua sin pérdida general → la de los ajustes', () {
+      final old = {'id': 'x', 'name': 'X', 'start': 0};
+      expect(TrainingSession.fromJson(old).lossGeneral, kDefaultSessionLoss);
+      expect(TrainingSession.fromJson(old, legacyLoss: 25).lossGeneral, 25);
+      // Los ajustes antiguos siguen leyéndose para migrar.
+      expect(Settings.fromJson({'loss': 25}).legacyLossThreshold, 25);
+    });
+  });
+
   group('RmTarget', () {
     test('JSON de ida y vuelta, y JSON inválido = null', () {
       expect(RmTarget.fromJson(t.toJson()), t);
@@ -234,25 +259,82 @@ void main() {
         expect(c.lossThresholdForSet(setId), 10);
         // Última rep: 0,57 frente a 0,60 → 5 %; con 0,53 → 11,7 % ≥ 10 %.
         expect(c.levelFor(11.7, setId: setId), FatigueLevel.stop);
-        await c.setSessionTarget(['squat'], loss: null);
-        expect(c.lossThresholdForSet(setId), c.settings.velocityLossThreshold);
+        await c.setSessionTarget(['squat'], loss: null); // heredar
+        expect(c.lossThresholdForSet(setId), c.activeSession!.lossGeneral);
       },
     );
 
-    test('aplicar a todos fija el objetivo en todos los ejercicios', () async {
-      await c.setSessionTarget(
-        [for (final e in c.exercises) e.id],
-        rm: t,
-        loss: 15.0,
-      );
+    test('«Guardar en todos»: %1RM en todos y pérdida como general', () async {
+      await c.setSessionTarget(['bench'], loss: 10.0); // sobrescritura previa
+      await c.applyTargetToAll(rm: t, loss: 15);
       final s = c.activeSession!;
       for (final e in c.exercises) {
         expect(s.rmTargets[e.id], t);
-        expect(s.lossTargets[e.id], 15);
+        expect(s.lossFor(e.id), 15);
       }
-      final back = TrainingSession.fromJson(s.toJson());
-      expect(back.lossTargets, s.lossTargets);
+      expect(s.lossGeneral, 15);
+      expect(s.lossTargets, isEmpty);
+
+      // Con «Sesión» (null) la general no cambia, pero se quitan las
+      // sobrescrituras.
+      await c.setSessionTarget(['bench'], loss: 30.0);
+      await c.applyTargetToAll(rm: t);
+      expect(c.activeSession!.lossGeneral, 15);
+      expect(c.activeSession!.lossTargets, isEmpty);
     });
+
+    test('herencia: el ejercicio usa la general salvo que la cambie', () async {
+      c.setExercise('squat');
+      expect(c.lossThresholdForSet(null), kDefaultSessionLoss);
+      await c.setSessionLoss(25);
+      await doSet(100, 0.60);
+      final setId = lastSetId;
+      expect(c.lossThresholdForSet(setId), 25);
+      await c.setSessionTarget(['squat'], loss: 10.0);
+      expect(c.lossThresholdForSet(setId), 10);
+      await c.setSessionTarget(['bench'], loss: 40.0); // otro ejercicio
+      expect(c.lossThresholdForSet(setId), 10);
+    });
+
+    test(
+      '«Sin límite»: sin avisos, pero la pérdida se sigue calculando',
+      () async {
+        c.setExercise('squat');
+        await c.setSessionTarget(['squat'], loss: kNoLossLimit);
+        c.setLoad(100);
+        for (final v in [0.60, 0.50]) {
+          now = now.add(const Duration(seconds: 3));
+          c.onFrame(f(v));
+        }
+        final live = c.lastLive!;
+        expect(c.lossThresholdForSet(live.rep.setId), isNull);
+        expect(live.level, FatigueLevel.off);
+        expect(live.lossPercent, closeTo(16.7, 0.5));
+        // La general sin límite también apaga los avisos.
+        await c.setSessionTarget(['squat'], loss: null);
+        await c.setSessionLoss(kNoLossLimit);
+        expect(c.levelFor(50, setId: live.rep.setId), FatigueLevel.off);
+        // Y el apagado general de Ajustes manda sobre la sesión.
+        await c.setSessionLoss(20);
+        expect(c.levelFor(50, setId: live.rep.setId), FatigueLevel.stop);
+        await c.updateSettings(c.settings.copyWith(fatigueEnabled: false));
+        expect(c.levelFor(50, setId: live.rep.setId), FatigueLevel.off);
+      },
+    );
+
+    test(
+      'la sesión nueva copia la pérdida general, no las del ejercicio',
+      () async {
+        await c.setSessionLoss(30);
+        await c.setSessionTarget(['squat'], rm: t, loss: 10.0);
+        final next = await c.newSession();
+        expect(next.lossGeneral, 30);
+        expect(next.lossTargets, isEmpty);
+        expect(next.rmTargets, isEmpty);
+        await c.setSessionLoss(kNoLossLimit);
+        expect((await c.newSession()).lossGeneral, kNoLossLimit);
+      },
+    );
 
     test(
       'el 1RM del día queda fijado: la fatiga entre series no lo baja',

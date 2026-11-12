@@ -53,10 +53,16 @@ String v2(double v) => v.toStringAsFixed(2);
 String rmTargetText(RmTarget t) =>
     t.min == t.max ? '${kg(t.min)} %' : '${kg(t.min)}–${kg(t.max)} %';
 
-/// "75–80 % · pérdida ≤ 20 %", "75–80 %" o "pérdida ≤ 20 %".
+/// "20 %" o "Sin límite" ([kNoLossLimit]).
+String lossLimitText(double loss) =>
+    loss.isInfinite ? 'Sin límite' : '${kg(loss)} %';
+
+/// "75–80 % · pérdida ≤ 20 %", "75–80 %", "pérdida ≤ 20 %" o
+/// "sin límite de pérdida".
 String sessionTargetText(RmTarget? rm, double? loss) => [
   if (rm != null) rmTargetText(rm),
-  if (loss != null) 'pérdida ≤ ${kg(loss)} %',
+  if (loss != null)
+    loss.isInfinite ? 'sin límite de pérdida' : 'pérdida ≤ ${kg(loss)} %',
 ].join(' · ');
 
 /// Consejo de carga: "↑ Sube a 110 kg (+10)", "✓ Mantén 100 kg"…

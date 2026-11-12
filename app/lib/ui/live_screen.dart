@@ -188,17 +188,12 @@ class _ExercisePicker extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
               ),
-              if (c.activeSession case final s?
-                  when s.rmTargets.containsKey(c.exerciseId) ||
-                      s.lossTargets.containsKey(c.exerciseId))
+              if (_headerTarget(c) case final text?)
                 Flexible(
                   child: Padding(
                     padding: const EdgeInsets.only(left: 8),
                     child: Text(
-                      sessionTargetText(
-                        s.rmTargets[c.exerciseId],
-                        s.lossTargets[c.exerciseId],
-                      ),
+                      text,
                       key: const Key('exercise-target'),
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 15, color: kNeutral),
@@ -212,6 +207,17 @@ class _ExercisePicker extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Objetivo del ejercicio actual en la cabecera: %1RM (si hay) y la
+/// pérdida de velocidad efectiva (si los avisos de fatiga están activos).
+String? _headerTarget(AppController c) {
+  final rm = c.activeSession?.rmTargets[c.exerciseId];
+  final loss = c.settings.fatigueEnabled
+      ? (c.lossThresholdForSet(null) ?? kNoLossLimit)
+      : null;
+  final t = sessionTargetText(rm, loss);
+  return t.isEmpty ? null : t;
 }
 
 class _ConnectionChip extends StatelessWidget {
@@ -359,7 +365,8 @@ class _BigReadout extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
-                      if (live.level != FatigueLevel.off)
+                      // Sin límite de pérdida se sigue mostrando como dato.
+                      if (c.settings.fatigueEnabled)
                         Flexible(
                           child: FittedBox(
                             fit: BoxFit.scaleDown,
@@ -638,7 +645,7 @@ class _SetBars extends StatelessWidget {
     final start = math.max(0, all.length - _maxBars);
     final vs = vsAll.sublist(start);
     final runningBest = runningMax(vsAll);
-    final limit = best * (1 - threshold / 100);
+    final limit = threshold == null ? null : best * (1 - threshold / 100);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
@@ -650,7 +657,9 @@ class _SetBars extends StatelessWidget {
           final barArea = math.max(0.0, box.maxHeight - labelH - indexH);
           // Sin altura suficiente (pantallas muy pequeñas): no dibujar barras.
           if (barArea < 16) return const SizedBox.shrink();
-          final limitY = indexH + barArea * (limit / best);
+          final limitY = limit == null
+              ? null
+              : indexH + barArea * (limit / best);
           return Stack(
             children: [
               Row(
@@ -716,7 +725,7 @@ class _SetBars extends StatelessWidget {
                     ),
                 ],
               ),
-              if (barArea > 40 && c.settings.fatigueEnabled)
+              if (barArea > 40 && c.settings.fatigueEnabled && limitY != null)
                 Positioned(
                   left: 0,
                   right: 0,

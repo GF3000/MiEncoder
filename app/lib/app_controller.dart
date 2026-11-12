@@ -136,7 +136,7 @@ class AppController extends ChangeNotifier {
 
     sessions
       ..clear()
-      ..addAll(await repo.sessions());
+      ..addAll(await repo.sessions(legacyLoss: settings.legacyLossThreshold));
     sessions.sort((a, b) => a.start.compareTo(b.start));
     await _migrateSetsWithoutSession();
     activeSessionId = s['activeSession'] as String?;
@@ -168,7 +168,7 @@ class AppController extends ChangeNotifier {
       final e = await repo.exercises();
       final st = await repo.sets();
       final r = await repo.reps();
-      final ss = await repo.sessions();
+      final ss = await repo.sessions(legacyLoss: settings.legacyLossThreshold);
       if (repo.writeCount != v) continue;
       players = p;
       exercises = e;
@@ -604,6 +604,8 @@ class AppController extends ChangeNotifier {
     return s != null && !_sameDay(s.start, clock());
   }
 
+  /// Crea una sesión. La pérdida de velocidad general se copia de la sesión
+  /// activa (o la última); los objetivos por ejercicio no se copian.
   Future<TrainingSession> _createSession(
     List<String> playerIds, {
     String? name,
@@ -614,6 +616,9 @@ class AppController extends ChangeNotifier {
       name: name ?? defaultSessionName(now),
       start: now,
       playerIds: playerIds,
+      lossGeneral:
+          (activeSession ?? sessions.lastOrNull)?.lossGeneral ??
+          kDefaultSessionLoss,
     );
     sessions.add(s);
     await repo.saveTrainingSession(s);
@@ -718,6 +723,7 @@ class AppController extends ChangeNotifier {
             .map((s) => s.start)
             .reduce((a, b) => a.isBefore(b) ? a : b),
         playerIds: playerIds,
+        lossGeneral: settings.legacyLossThreshold,
       );
       sessions.add(session);
       await repo.saveTrainingSession(session);
@@ -769,20 +775,24 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Nivel de fatiga ([FatigueLevel.off] si está apagada en los ajustes),
-  /// con el umbral del ejercicio de la serie [setId] en su sesión.
-  FatigueLevel levelFor(double lossPercent, {String? setId}) =>
-      settings.fatigueEnabled
-      ? fatigueLevel(lossPercent, lossThresholdForSet(setId))
-      : FatigueLevel.off;
+  /// Nivel de fatiga con el umbral de la serie [setId] (ver
+  /// [lossThresholdForSet]). [FatigueLevel.off] si está apagada en los
+  /// ajustes o no hay límite.
+  FatigueLevel levelFor(double lossPercent, {String? setId}) {
+    final t = settings.fatigueEnabled ? lossThresholdForSet(setId) : null;
+    return t == null ? FatigueLevel.off : fatigueLevel(lossPercent, t);
+  }
 
-  /// Pérdida de velocidad máxima (%) para la serie [setId]: la de su
-  /// ejercicio en su sesión o, si no hay, la de los ajustes.
-  double lossThresholdForSet(String? setId) {
+  /// Pérdida de velocidad máxima (%) para la serie [setId]: la del
+  /// ejercicio en su sesión si la sobrescribe, si no la general de la
+  /// sesión. Sin serie, la del ejercicio actual en la sesión activa. null =
+  /// sin límite.
+  double? lossThresholdForSet(String? setId) {
     final s = setId == null ? null : setById(setId);
-    if (s == null) return settings.velocityLossThreshold;
-    return sessionById(s.sessionId)?.lossTargets[s.exerciseId] ??
-        settings.velocityLossThreshold;
+    final session = s == null ? activeSession : sessionById(s.sessionId);
+    final loss =
+        session?.lossFor(s?.exerciseId ?? exerciseId) ?? kDefaultSessionLoss;
+    return loss.isInfinite ? null : loss;
   }
 
   int setsOfPlayer(String playerId) =>
@@ -996,7 +1006,8 @@ class AppController extends ChangeNotifier {
       setSessionTarget([exerciseId], rm: target, loss: _keep);
 
   /// Fija el objetivo de la sesión activa para [exerciseIds]: rango de %1RM
-  /// ([rm]) y pérdida de velocidad máxima ([loss]); null = quitar.
+  /// ([rm], null = sin objetivo) y pérdida de velocidad máxima ([loss]: un
+  /// valor, [kNoLossLimit], o null = heredar la de la sesión).
   Future<void> setSessionTarget(
     List<String> exerciseIds, {
     Object? rm = _keep,
@@ -1013,6 +1024,29 @@ class AppController extends ChangeNotifier {
   }
 
   static const _keep = Object();
+
+  /// Cambia la pérdida de velocidad general de la sesión activa
+  /// ([kNoLossLimit] = sin límite).
+  Future<void> setSessionLoss(double loss) async {
+    final s = activeSession;
+    if (s == null || s.lossGeneral == loss) return;
+    await _replaceSession(s.copyWith(lossGeneral: loss));
+    notifyListeners();
+  }
+
+  /// «Guardar en todos»: copia [rm] a todos los ejercicios y, para la
+  /// pérdida, la pone como general de la sesión ([loss] null = dejar la
+  /// general como está) y quita las sobrescrituras por ejercicio.
+  Future<void> applyTargetToAll({RmTarget? rm, double? loss}) async {
+    var s = activeSession;
+    if (s == null) return;
+    for (final e in exercises) {
+      s = s!.withRmTarget(e.id, rm);
+    }
+    s = s!.copyWith(lossGeneral: loss ?? s.lossGeneral, lossTargets: const {});
+    await _replaceSession(s);
+    notifyListeners();
+  }
 
   /// Series del mismo deportista (o sin asignar), ejercicio, sesión y día
   /// que [setId], hasta ella incluida.

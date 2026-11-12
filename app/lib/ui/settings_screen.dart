@@ -57,30 +57,14 @@ class SettingsScreen extends StatelessWidget {
                 title: const Text('Avisos de fatiga'),
                 subtitle: Text(
                   s.fatigueEnabled
-                      ? 'Colores, aviso y bocinazo según la pérdida de velocidad'
-                      : 'Desactivados: sin colores, sin aviso y sin bocinazo',
+                      ? 'Colores, aviso y bocinazo según la pérdida de velocidad '
+                            'de cada sesión (se fija en el panel de la sesión)'
+                      : 'Apagados en todas las sesiones: sin colores, sin aviso '
+                            'y sin bocinazo',
                 ),
                 value: s.fatigueEnabled,
                 onChanged: (v) =>
                     c.updateSettings(s.copyWith(fatigueEnabled: v)),
-              ),
-              ListTile(
-                enabled: s.fatigueEnabled,
-                title: Text(
-                  'Bocinazo con pérdida ≥ ${s.velocityLossThreshold.round()} %',
-                ),
-                subtitle: Slider(
-                  value: s.velocityLossThreshold,
-                  min: 5,
-                  max: 50,
-                  divisions: 45,
-                  label: '${s.velocityLossThreshold.round()} %',
-                  onChanged: s.fatigueEnabled
-                      ? (v) => c.updateSettings(
-                          s.copyWith(velocityLossThreshold: v.roundToDouble()),
-                        )
-                      : null,
-                ),
               ),
               SwitchListTile(
                 title: const Text('Pitido en cada repetición'),

@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../app_controller.dart';
 import '../core/models.dart';
 import 'common.dart';
+import 'value_sheets.dart';
 
 /// Normaliza para buscar sin tildes ni mayúsculas.
 String _norm(String s) {
@@ -255,11 +256,31 @@ Future<void> showSessionSheet(BuildContext context, AppController c) {
                 ),
               ),
               if (s != null) ...[
+                ListTile(
+                  key: const Key('session-loss'),
+                  leading: const Icon(Icons.trending_down),
+                  title: const Text('Pérdida de velocidad'),
+                  subtitle: const Text(
+                    'Para todos los ejercicios de la sesión salvo los que la cambien',
+                  ),
+                  trailing: Text(
+                    lossLimitText(s.lossGeneral),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  onTap: () async {
+                    final v = await askSessionLoss(ctx, s.lossGeneral);
+                    if (v != null) await c.setSessionLoss(v);
+                  },
+                ),
                 const _Section('Objetivo por ejercicio'),
                 for (final e in c.exercises)
                   Builder(
                     builder: (_) {
                       final rm = s.rmTargets[e.id];
+                      // Solo se muestra la pérdida si el ejercicio la cambia.
                       final loss = s.lossTargets[e.id];
                       final has = rm != null || loss != null;
                       return ListTile(
@@ -285,16 +306,18 @@ Future<void> showSessionSheet(BuildContext context, AppController c) {
                             exerciseName: e.name,
                             rm: rm,
                             loss: loss,
-                            defaultLoss: c.settings.velocityLossThreshold,
+                            sessionLoss: s.lossGeneral,
                           );
                           if (r == null) return;
-                          await c.setSessionTarget(
-                            r.applyToAll
-                                ? [for (final x in c.exercises) x.id]
-                                : [e.id],
-                            rm: r.rm,
-                            loss: r.loss,
-                          );
+                          if (r.applyToAll) {
+                            await c.applyTargetToAll(rm: r.rm, loss: r.loss);
+                          } else {
+                            await c.setSessionTarget(
+                              [e.id],
+                              rm: r.rm,
+                              loss: r.loss,
+                            );
+                          }
                         },
                       );
                     },
@@ -387,7 +410,8 @@ Future<void> askContinueOrNewSession(
   if (choice == 'empty') await c.newSession(copyPlayers: false);
 }
 
-/// Resultado del panel de objetivo. null en [rm] o [loss] = sin valor.
+/// Resultado del panel de objetivo. [rm] null = sin objetivo; [loss]: un
+/// valor, [kNoLossLimit] (sin límite) o null (heredar la de la sesión).
 typedef SessionTargetChoice = ({RmTarget? rm, double? loss, bool applyToAll});
 
 /// Rangos de intensidad habituales en VBT (null = sin objetivo).
@@ -412,7 +436,7 @@ Future<SessionTargetChoice?> askSessionTarget(
   required String exerciseName,
   RmTarget? rm,
   double? loss,
-  required double defaultLoss,
+  required double sessionLoss,
 }) {
   return showModalBottomSheet<SessionTargetChoice>(
     context: context,
@@ -422,7 +446,7 @@ Future<SessionTargetChoice?> askSessionTarget(
       exerciseName: exerciseName,
       rm: rm,
       loss: loss,
-      defaultLoss: defaultLoss,
+      sessionLoss: sessionLoss,
     ),
   );
 }
@@ -431,13 +455,15 @@ class _TargetSheet extends StatefulWidget {
   final String exerciseName;
   final RmTarget? rm;
   final double? loss;
-  final double defaultLoss;
+
+  /// Pérdida general de la sesión ([kNoLossLimit] = sin límite).
+  final double sessionLoss;
 
   const _TargetSheet({
     required this.exerciseName,
     this.rm,
     this.loss,
-    required this.defaultLoss,
+    required this.sessionLoss,
   });
 
   @override
@@ -464,7 +490,11 @@ class _TargetSheetState extends State<_TargetSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final primary = theme.colorScheme.primary;
-    final losses = {...kLossPresets, ?loss}.toList()..sort();
+    final custom = loss;
+    final losses = {
+      ...kLossPresets,
+      if (custom != null && custom.isFinite) custom,
+    }.toList()..sort();
 
     Widget header(String title, String value, {bool dim = false}) => Row(
       crossAxisAlignment: CrossAxisAlignment.baseline,
@@ -544,7 +574,9 @@ class _TargetSheetState extends State<_TargetSheet> {
                   const SizedBox(height: 12),
                   header(
                     'Pérdida de velocidad máxima',
-                    '${kg(loss ?? widget.defaultLoss)} %',
+                    loss == null
+                        ? 'Sesión · ${lossLimitText(widget.sessionLoss)}'
+                        : lossLimitText(loss!),
                     dim: loss == null,
                   ),
                   const SizedBox(height: 8),
@@ -560,8 +592,16 @@ class _TargetSheetState extends State<_TargetSheet> {
                           onSelected: (_) => setState(() => loss = l),
                         ),
                       ChoiceChip(
+                        key: const Key('loss-off'),
+                        label: const Text('Sin límite'),
+                        selected: loss == kNoLossLimit,
+                        onSelected: (_) => setState(() => loss = kNoLossLimit),
+                      ),
+                      ChoiceChip(
                         key: const Key('loss-default'),
-                        label: Text('Ajustes (${kg(widget.defaultLoss)} %)'),
+                        label: Text(
+                          'Sesión (${lossLimitText(widget.sessionLoss)})',
+                        ),
                         selected: loss == null,
                         onSelected: (_) => setState(() => loss = null),
                       ),
@@ -599,4 +639,48 @@ class _TargetSheetState extends State<_TargetSheet> {
       ),
     );
   }
+}
+
+/// Pérdida de velocidad general de la sesión, con botones de un toque.
+/// Devuelve el valor ([kNoLossLimit] = sin límite) o null si se cancela.
+Future<double?> askSessionLoss(BuildContext context, double current) {
+  return showModalBottomSheet<double>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (ctx) => SheetScaffold(
+      title: 'Pérdida de velocidad de la sesión',
+      content: [
+        ValueHeader('Actual', lossLimitText(current)),
+        const SizedBox(height: 4),
+        const Text(
+          'Se aplica a todos los ejercicios salvo los que la cambien en su '
+          'objetivo. La sesión siguiente empieza con esta.',
+          style: TextStyle(fontSize: 13, color: Colors.white60),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final l in [...kLossPresets, kNoLossLimit])
+              ChoiceChip(
+                key: Key(
+                  l.isInfinite ? 'session-loss-off' : 'session-loss-${kg(l)}',
+                ),
+                label: Text(lossLimitText(l)),
+                selected: l == current,
+                onSelected: (_) => Navigator.pop(ctx, l),
+              ),
+          ],
+        ),
+      ],
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancelar'),
+        ),
+      ],
+    ),
+  );
 }

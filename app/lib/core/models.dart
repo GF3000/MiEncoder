@@ -254,6 +254,21 @@ class RmTarget {
   int get hashCode => Object.hash(min, max);
 }
 
+/// Pérdida de velocidad "sin límite": sin avisos de fatiga (la pérdida se
+/// sigue mostrando como dato).
+const double kNoLossLimit = double.infinity;
+
+/// Pérdida de velocidad general de una sesión nueva sin sesión anterior.
+const double kDefaultSessionLoss = 20;
+
+Object _lossToJson(double v) => v.isInfinite ? 'off' : v;
+
+double? _lossFromJson(Object? j) => switch (j) {
+  'off' => kNoLossLimit,
+  num n => n.toDouble(),
+  _ => null,
+};
+
 /// Una sesión: "la convocatoria del día". Decide qué deportistas aparecen en
 /// la cuadrícula y agrupa las series que se registran mientras está activa.
 class TrainingSession {
@@ -267,8 +282,12 @@ class TrainingSession {
   /// Intensidad objetivo por ejercicio (id → rango de %1RM).
   final Map<String, RmTarget> rmTargets;
 
-  /// Pérdida de velocidad máxima (%) por ejercicio. Sin valor se usa la de
-  /// los ajustes.
+  /// Pérdida de velocidad máxima (%) de toda la sesión; [kNoLossLimit] =
+  /// sin límite.
+  final double lossGeneral;
+
+  /// Pérdida por ejercicio que sobrescribe [lossGeneral]: un valor o
+  /// [kNoLossLimit]. Sin entrada, el ejercicio hereda la de la sesión.
   final Map<String, double> lossTargets;
 
   const TrainingSession({
@@ -277,6 +296,7 @@ class TrainingSession {
     required this.start,
     this.playerIds = const [],
     this.rmTargets = const {},
+    this.lossGeneral = kDefaultSessionLoss,
     this.lossTargets = const {},
   });
 
@@ -284,6 +304,7 @@ class TrainingSession {
     String? name,
     List<String>? playerIds,
     Map<String, RmTarget>? rmTargets,
+    double? lossGeneral,
     Map<String, double>? lossTargets,
   }) => TrainingSession(
     id: id,
@@ -291,8 +312,12 @@ class TrainingSession {
     start: start,
     playerIds: playerIds ?? this.playerIds,
     rmTargets: rmTargets ?? this.rmTargets,
+    lossGeneral: lossGeneral ?? this.lossGeneral,
     lossTargets: lossTargets ?? this.lossTargets,
   );
+
+  /// Pérdida que se aplica a [exerciseId] ([kNoLossLimit] = sin límite).
+  double lossFor(String exerciseId) => lossTargets[exerciseId] ?? lossGeneral;
 
   /// Fija (o quita, con null) el objetivo de un ejercicio.
   TrainingSession withRmTarget(String exerciseId, RmTarget? t) => copyWith(
@@ -303,7 +328,8 @@ class TrainingSession {
     },
   );
 
-  /// Fija (o quita, con null) la pérdida de velocidad máxima de un ejercicio.
+  /// Sobrescribe la pérdida de un ejercicio (un valor o [kNoLossLimit]);
+  /// null = heredar la de la sesión.
   TrainingSession withLossTarget(String exerciseId, double? loss) => copyWith(
     lossTargets: {
       for (final e in lossTargets.entries)
@@ -319,10 +345,20 @@ class TrainingSession {
     'players': playerIds,
     if (rmTargets.isNotEmpty)
       'rmTargets': {for (final e in rmTargets.entries) e.key: e.value.toJson()},
-    if (lossTargets.isNotEmpty) 'lossTargets': lossTargets,
+    'lossGeneral': _lossToJson(lossGeneral),
+    if (lossTargets.isNotEmpty)
+      'lossTargets': {
+        for (final e in lossTargets.entries) e.key: _lossToJson(e.value),
+      },
   };
 
-  factory TrainingSession.fromJson(Map<String, Object?> j) => TrainingSession(
+  /// [legacyLoss]: pérdida general para sesiones guardadas antes de que la
+  /// tuvieran (la que había en los ajustes), para que su historial se siga
+  /// coloreando igual.
+  factory TrainingSession.fromJson(
+    Map<String, Object?> j, {
+    double legacyLoss = kDefaultSessionLoss,
+  }) => TrainingSession(
     id: j['id'] as String,
     name: j['name'] as String,
     start: DateTime.fromMillisecondsSinceEpoch(j['start'] as int),
@@ -333,18 +369,21 @@ class TrainingSession {
       for (final e in ((j['rmTargets'] as Map?) ?? const {}).entries)
         e.key as String: ?RmTarget.fromJson(e.value),
     },
+    lossGeneral: _lossFromJson(j['lossGeneral']) ?? legacyLoss,
     lossTargets: {
       for (final e in ((j['lossTargets'] as Map?) ?? const {}).entries)
-        if (e.value is num) e.key as String: (e.value as num).toDouble(),
+        e.key as String: ?_lossFromJson(e.value),
     },
   );
 }
 
 class Settings {
-  /// Pérdida de velocidad (%) a partir de la que se avisa.
-  final double velocityLossThreshold;
+  /// Pérdida de velocidad que había en los ajustes antes de que viviera en
+  /// la sesión. Solo sirve para migrar sesiones antiguas.
+  final double legacyLossThreshold;
 
-  /// Si es false: sin colores de fatiga, sin aviso ni bocinazo.
+  /// Apagado general: si es false, sin colores de fatiga, sin aviso ni
+  /// bocinazo en ninguna sesión.
   final bool fatigueEnabled;
   final VelocityMetric metric;
   final bool beepEachRep;
@@ -365,7 +404,7 @@ class Settings {
   final bool genericWithoutProfile;
 
   const Settings({
-    this.velocityLossThreshold = 20,
+    this.legacyLossThreshold = 20,
     this.fatigueEnabled = true,
     this.metric = VelocityMetric.mpv,
     this.beepEachRep = true,
@@ -378,7 +417,7 @@ class Settings {
   });
 
   Settings copyWith({
-    double? velocityLossThreshold,
+    double? legacyLossThreshold,
     bool? fatigueEnabled,
     VelocityMetric? metric,
     bool? beepEachRep,
@@ -389,7 +428,7 @@ class Settings {
     bool? loadAdvice,
     bool? genericWithoutProfile,
   }) => Settings(
-    velocityLossThreshold: velocityLossThreshold ?? this.velocityLossThreshold,
+    legacyLossThreshold: legacyLossThreshold ?? this.legacyLossThreshold,
     fatigueEnabled: fatigueEnabled ?? this.fatigueEnabled,
     metric: metric ?? this.metric,
     beepEachRep: beepEachRep ?? this.beepEachRep,
@@ -402,7 +441,7 @@ class Settings {
   );
 
   Map<String, Object?> toJson() => {
-    'loss': velocityLossThreshold,
+    'loss': legacyLossThreshold,
     'fatigue': fatigueEnabled,
     'metric': metric.name,
     'beep': beepEachRep,
@@ -415,7 +454,7 @@ class Settings {
   };
 
   factory Settings.fromJson(Map<String, Object?> j) => Settings(
-    velocityLossThreshold: (j['loss'] as num?)?.toDouble() ?? 20,
+    legacyLossThreshold: (j['loss'] as num?)?.toDouble() ?? 20,
     fatigueEnabled: (j['fatigue'] as bool?) ?? true,
     metric: VelocityMetric.values.firstWhere(
       (m) => m.name == j['metric'],
