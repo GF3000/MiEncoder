@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:sembast/sembast_memory.dart';
 import 'package:miencoder/app_controller.dart';
+import 'package:miencoder/core/models.dart';
 import 'package:miencoder/main.dart';
 import 'package:miencoder/services/encoder.dart';
 import 'package:miencoder/services/repository.dart';
@@ -125,8 +126,8 @@ void main() {
         final menu = tester.getRect(
           find.ancestor(of: item, matching: find.byType(Material)).first,
         );
-        expect(menu.width, lessThanOrEqualTo(280));
-        expect(menu.width, lessThan(size.width * 0.75));
+        expect(menu.width, lessThanOrEqualTo(360));
+        expect(menu.width, lessThan(size.width - 40)); // no ocupa todo el ancho
         await tester.tap(item);
         await tester.pumpAndSettle();
         expect(c.exerciseId, 'bench');
@@ -134,5 +135,83 @@ void main() {
         expect(tester.takeException(), isNull);
       });
     }
+
+    testWidgets('el icono del menú edita el objetivo sin cambiar de ejercicio', (
+      tester,
+    ) async {
+      await pumpApp(tester, const Size(1280, 800));
+      final before = c.exerciseId;
+      final headerW = tester
+          .getSize(find.byKey(const Key('exercise-picker')))
+          .width;
+      await tester.tap(find.byKey(const Key('exercise-picker')));
+      await tester.pumpAndSettle();
+      // Sin objetivo: icono +.
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('exercise-target-edit-bench')),
+          matching: find.byIcon(Icons.add),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('exercise-target-edit-bench')));
+      await tester.pumpAndSettle();
+      expect(find.text('Objetivo · Press banca'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('rm-preset-1'))); // 65–75
+      await tester.tap(find.byKey(const Key('loss-15')));
+      await tester.tap(find.byKey(const Key('rm-target-save')));
+      await tester.pumpAndSettle();
+      expect(c.exerciseId, before); // no ha cambiado de ejercicio
+      final s = c.activeSession!;
+      expect(s.rmTargets['bench'], const RmTarget(65, 75));
+      expect(s.lossTargets['bench'], 15);
+      expect(s.rmTargets[before], isNull);
+      // El botón plegado no cambia de ancho (el objetivo es de otro ejercicio).
+      expect(
+        tester.getSize(find.byKey(const Key('exercise-picker'))).width,
+        headerW,
+      );
+
+      // En el menú se ve el objetivo y el icono pasa a ⚙.
+      await tester.tap(find.byKey(const Key('exercise-picker')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('exercise-item-target-bench')))
+            .data,
+        '65–75 % · pérdida ≤ 15 %',
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('exercise-target-edit-bench')),
+          matching: find.byIcon(Icons.settings),
+        ),
+        findsOneWidget,
+      );
+      // Y el panel de la sesión muestra lo mismo.
+      await tester.tapAt(const Offset(5, 790)); // cerrar el menú
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('session-picker')));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('rm-target-bench')),
+          matching: find.text('65–75 % · pérdida ≤ 15 %'),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('tocar el objetivo de la cabecera abre su panel', (
+      tester,
+    ) async {
+      await pumpApp(tester, const Size(1280, 800));
+      final ex = c.exercise.name;
+      await tester.tap(find.byKey(const Key('exercise-target')));
+      await tester.pumpAndSettle();
+      expect(find.text('Objetivo · $ex'), findsOneWidget);
+      expect(find.byKey(const Key('rm-target-save')), findsOneWidget);
+    });
   });
 }

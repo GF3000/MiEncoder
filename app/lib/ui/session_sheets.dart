@@ -300,25 +300,7 @@ Future<void> showSessionSheet(BuildContext context, AppController c) {
                             color: has ? null : Colors.white54,
                           ),
                         ),
-                        onTap: () async {
-                          final r = await askSessionTarget(
-                            ctx,
-                            exerciseName: e.name,
-                            rm: rm,
-                            loss: loss,
-                            sessionLoss: s.lossGeneral,
-                          );
-                          if (r == null) return;
-                          if (r.applyToAll) {
-                            await c.applyTargetToAll(rm: r.rm, loss: r.loss);
-                          } else {
-                            await c.setSessionTarget(
-                              [e.id],
-                              rm: r.rm,
-                              loss: r.loss,
-                            );
-                          }
-                        },
+                        onTap: () => editExerciseTarget(ctx, c, e),
                       );
                     },
                   ),
@@ -408,6 +390,30 @@ Future<void> askContinueOrNewSession(
   );
   if (choice == 'copy') await c.newSession(copyPlayers: true);
   if (choice == 'empty') await c.newSession(copyPlayers: false);
+}
+
+/// Abre el panel de objetivo de [e] en la sesión activa y guarda lo
+/// elegido («Guardar» solo en [e], «Guardar en todos» en todos).
+Future<void> editExerciseTarget(
+  BuildContext context,
+  AppController c,
+  Exercise e,
+) async {
+  final s = c.activeSession;
+  if (s == null) return;
+  final r = await askSessionTarget(
+    context,
+    exerciseName: e.name,
+    rm: s.rmTargets[e.id],
+    loss: s.lossTargets[e.id],
+    sessionLoss: s.lossGeneral,
+  );
+  if (r == null) return;
+  if (r.applyToAll) {
+    await c.applyTargetToAll(rm: r.rm, loss: r.loss);
+  } else {
+    await c.setSessionTarget([e.id], rm: r.rm, loss: r.loss);
+  }
 }
 
 /// Resultado del panel de objetivo. [rm] null = sin objetivo; [loss]: un

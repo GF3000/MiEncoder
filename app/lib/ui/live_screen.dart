@@ -143,10 +143,13 @@ class _ExercisePicker extends StatelessWidget {
   final AppController c;
   const _ExercisePicker({required this.c});
 
-  /// Botón compacto con el ejercicio actual; el menú se ajusta al texto
-  /// en lugar de ocupar todo el ancho de la cabecera.
+  /// Botón compacto con el ejercicio actual y su objetivo. El menú lista
+  /// los ejercicios con su objetivo y un botón para editarlo sin cambiar de
+  /// ejercicio; tocar el objetivo del botón también lo edita.
   @override
   Widget build(BuildContext context) {
+    final session = c.activeSession;
+    final headerText = _headerTarget(c);
     return Align(
       alignment: Alignment.centerLeft,
       widthFactor: 1, // ocupar solo lo que mide el texto
@@ -155,24 +158,77 @@ class _ExercisePicker extends StatelessWidget {
         tooltip: 'Cambiar ejercicio',
         initialValue: c.exerciseId,
         position: PopupMenuPosition.under,
-        constraints: const BoxConstraints(minWidth: 180, maxWidth: 280),
+        constraints: const BoxConstraints(minWidth: 180, maxWidth: 360),
         onSelected: c.setExercise,
         itemBuilder: (_) => [
           for (final e in c.exercises)
             PopupMenuItem(
               value: e.id,
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 28,
-                    child: e.id == c.exerciseId
-                        ? const Icon(Icons.check, size: 20)
-                        : null,
-                  ),
-                  Flexible(
-                    child: Text(e.name, overflow: TextOverflow.ellipsis),
-                  ),
-                ],
+              child: Builder(
+                builder: (itemCtx) {
+                  // Pérdida solo si el ejercicio sobrescribe la de la sesión.
+                  final target = session == null
+                      ? ''
+                      : sessionTargetText(
+                          session.rmTargets[e.id],
+                          session.lossTargets[e.id],
+                        );
+                  return Row(
+                    // Icono alineado a la derecha en todas las filas sin
+                    // estirar el menú más de lo que pide el contenido.
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Flexible(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 28,
+                              child: e.id == c.exerciseId
+                                  ? const Icon(Icons.check, size: 20)
+                                  : null,
+                            ),
+                            Flexible(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(e.name, overflow: TextOverflow.ellipsis),
+                                  if (target.isNotEmpty)
+                                    Text(
+                                      target,
+                                      key: Key('exercise-item-target-${e.id}'),
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: kNeutral,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (session != null) ...[
+                        const SizedBox(width: 8),
+                        // Botón propio: no selecciona el ejercicio.
+                        IconButton(
+                          key: Key('exercise-target-edit-${e.id}'),
+                          tooltip: 'Objetivo de ${e.name}',
+                          icon: Icon(
+                            target.isEmpty ? Icons.add : Icons.settings,
+                            size: 20,
+                          ),
+                          onPressed: () {
+                            Navigator.pop(itemCtx); // cerrar el menú
+                            editExerciseTarget(context, c, e);
+                          },
+                        ),
+                      ],
+                    ],
+                  );
+                },
               ),
             ),
         ],
@@ -181,22 +237,31 @@ class _ExercisePicker extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // El objetivo se recorta antes que el nombre.
               Flexible(
+                flex: 2,
                 child: Text(
                   c.exercise.name,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
               ),
-              if (_headerTarget(c) case final text?)
+              if (headerText != null && session != null)
                 Flexible(
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 8),
-                    child: Text(
-                      text,
-                      key: const Key('exercise-target'),
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 15, color: kNeutral),
+                  child: InkWell(
+                    key: const Key('exercise-target'),
+                    borderRadius: BorderRadius.circular(6),
+                    onTap: () => editExerciseTarget(context, c, c.exercise),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      child: Text(
+                        headerText,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 15, color: kNeutral),
+                      ),
                     ),
                   ),
                 ),
