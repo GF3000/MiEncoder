@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:sembast/sembast_memory.dart';
@@ -54,6 +55,15 @@ void main() {
       );
       await c.init();
     });
+
+    /// Abre el menú tocando el nombre del ejercicio (el objetivo de al
+    /// lado abre su panel).
+    Future<void> openExerciseMenu(WidgetTester tester) => tester.tap(
+      find.descendant(
+        of: find.byKey(const Key('exercise-picker')),
+        matching: find.text(c.exercise.name),
+      ),
+    );
 
     Future<void> pumpApp(WidgetTester tester, Size size) async {
       tester.view.physicalSize = size;
@@ -120,7 +130,7 @@ void main() {
         tester,
       ) async {
         await pumpApp(tester, size);
-        await tester.tap(find.byKey(const Key('exercise-picker')));
+        await openExerciseMenu(tester);
         await tester.pumpAndSettle();
         final item = find.text('Press banca').last;
         final menu = tester.getRect(
@@ -144,7 +154,7 @@ void main() {
       final headerW = tester
           .getSize(find.byKey(const Key('exercise-picker')))
           .width;
-      await tester.tap(find.byKey(const Key('exercise-picker')));
+      await openExerciseMenu(tester);
       await tester.pumpAndSettle();
       // Sin objetivo: icono +.
       expect(
@@ -173,7 +183,7 @@ void main() {
       );
 
       // En el menú se ve el objetivo y el icono pasa a ⚙.
-      await tester.tap(find.byKey(const Key('exercise-picker')));
+      await openExerciseMenu(tester);
       await tester.pumpAndSettle();
       expect(
         tester
@@ -212,6 +222,36 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Objetivo · $ex'), findsOneWidget);
       expect(find.byKey(const Key('rm-target-save')), findsOneWidget);
+    });
+
+    group('con objetivo', () {
+      // E/S real de la base de datos: en setUp, fuera del reloj simulado de
+      // testWidgets (dentro se queda esperando para siempre).
+      setUp(
+        () => c.setSessionTarget(
+          [c.exerciseId],
+          rm: const RmTarget(65, 75),
+          loss: 25.0,
+        ),
+      );
+
+      testWidgets(
+        'tablet: el objetivo de la cabecera se ve entero y es pulsable',
+        (tester) async {
+          // Tablet en horizontal (1600 × 1000 dp).
+          await pumpApp(tester, const Size(1600, 1000));
+          final pill = find.byKey(const Key('exercise-target'));
+          final text = find.descendant(
+            of: pill,
+            matching: find.text('65–75 % · pérdida ≤ 25 %'),
+          );
+          expect(text, findsOneWidget);
+          final para = tester.renderObject<RenderParagraph>(text);
+          expect(para.didExceedMaxLines, isFalse); // sin «…»
+          expect(tester.getSize(pill).height, greaterThanOrEqualTo(40));
+          expect(tester.takeException(), isNull);
+        },
+      );
     });
   });
 }

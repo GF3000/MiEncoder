@@ -36,7 +36,9 @@ class LiveScreen extends StatelessWidget {
                 )
               : Row(
                   children: [
-                    Flexible(child: _ExercisePicker(c: c)),
+                    // El ejercicio (con su objetivo) necesita más sitio que
+                    // el nombre de la sesión.
+                    Flexible(flex: 3, child: _ExercisePicker(c: c)),
                     Container(
                       width: 1,
                       height: 28,
@@ -234,39 +236,76 @@ class _ExercisePicker extends StatelessWidget {
         ],
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // El objetivo se recorta antes que el nombre.
-              Flexible(
-                flex: 2,
-                child: Text(
-                  c.exercise.name,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleLarge,
+          child: LayoutBuilder(
+            builder: (context, box) => Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // El nombre mide lo que necesita (con tope, para dejar sitio
+                // al objetivo); el objetivo usa todo lo que quede y es lo
+                // primero que se recorta.
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: math.min(240, box.maxWidth * 0.5),
+                  ),
+                  child: Text(
+                    c.exercise.name,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
                 ),
-              ),
-              if (headerText != null && session != null)
-                Flexible(
-                  child: InkWell(
-                    key: const Key('exercise-target'),
-                    borderRadius: BorderRadius.circular(6),
-                    onTap: () => editExerciseTarget(context, c, c.exercise),
+                if (headerText != null && session != null)
+                  Flexible(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      child: Text(
-                        headerText,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 15, color: kNeutral),
+                      padding: const EdgeInsets.only(left: 10),
+                      child: Material(
+                        color: kNeutral.withValues(alpha: 0.14),
+                        shape: StadiumBorder(
+                          side: BorderSide(
+                            color: kNeutral.withValues(alpha: 0.5),
+                          ),
+                        ),
+                        child: InkWell(
+                          key: const Key('exercise-target'),
+                          customBorder: const StadiumBorder(),
+                          onTap: () =>
+                              editExerciseTarget(context, c, c.exercise),
+                          child: ConstrainedBox(
+                            // Zona táctil cómoda dentro de la cabecera.
+                            constraints: const BoxConstraints(minHeight: 40),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.tune,
+                                    size: 18,
+                                    color: kNeutral,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Flexible(
+                                    child: Text(
+                                      headerText,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        color: kNeutral,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
-              const Icon(Icons.arrow_drop_down),
-            ],
+                const Icon(Icons.arrow_drop_down),
+              ],
+            ),
           ),
         ),
       ),
