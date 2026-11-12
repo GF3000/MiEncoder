@@ -22,6 +22,14 @@
           }
         },
         {
+          "client_id": "236424288575-75vsg9b2qurphlg2ee8fcufohocaec01.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "gf3000.miencoder.app",
+            "certificate_hash": "e68c932719debc2018f887b4ca9b4c04a16cb30c"
+          }
+        },
+        {
           "client_id": "236424288575-erg2ggkedjh5jn69cdbh72bfkg0g6puu.apps.googleusercontent.com",
           "client_type": 3
         }

@@ -7,3 +7,6 @@ adr/www/
 Thumbs.db
 .idea/
 *.iml
+
+# Salida de compilación de Gradle
+app/android/build/
