@@ -195,6 +195,24 @@ class Repository {
     });
   }
 
+  /// Guarda una serie y sus repeticiones de una vez (p. ej. al cambiar el
+  /// ejercicio): nunca se sube la serie con una mezcla de versiones.
+  Future<void> saveSetWithReps(WorkSet s, List<Rep> reps) =>
+      db.transaction((tx) async {
+        final at = clock();
+        for (final r in reps) {
+          await _put(
+            _reps,
+            r.id,
+            r.toJson(),
+            client: tx,
+            updatedAt: at,
+            dirty: false,
+          );
+        }
+        await _put(_sets, s.id, s.toJson(), client: tx, updatedAt: at);
+      });
+
   Future<List<Rep>> reps() async =>
       (await _live(_reps)).map(Rep.fromJson).toList();
 

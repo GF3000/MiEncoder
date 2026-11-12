@@ -316,7 +316,7 @@ class _ExercisePicker extends StatelessWidget {
 /// Objetivo del ejercicio actual en la cabecera: %1RM (si hay) y la
 /// pérdida de velocidad efectiva (si los avisos de fatiga están activos).
 String? _headerTarget(AppController c) {
-  final rm = c.activeSession?.rmTargets[c.exerciseId];
+  final rm = c.activeSession?.rmFor(c.exerciseId);
   final loss = c.settings.fatigueEnabled
       ? (c.lossThresholdForSet(null) ?? kNoLossLimit)
       : null;

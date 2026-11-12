@@ -247,6 +247,88 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    Future<void> waitFor(WidgetTester tester, bool Function() done) async {
+      // Margen amplio: con toda la suite en paralelo la BD tarda más.
+      for (var i = 0; i < 100 && !done(); i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+    }
+
+    testWidgets('mantener pulsada una serie → Cambiar ejercicio → Deshacer', (
+      tester,
+    ) async {
+      c.setExercise('squat');
+      await pumpApp(tester, const Size(393, 873));
+      c.onFrame(f(1.0));
+      c.onFrame(f(0.9));
+      c.forceNewSet();
+      final setId = c.sets.single.id;
+      await tester.pump(const Duration(seconds: 1));
+
+      await tester.tap(find.byTooltip('Series recientes'));
+      await tester.pumpAndSettle();
+      await tester.longPress(
+        find
+            .descendant(
+              of: find.byType(SetTile),
+              matching: find.byType(ListTile),
+            )
+            .first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cambiar ejercicio'));
+      await tester.pumpAndSettle();
+      expect(find.text('Cambiar el ejercicio de la serie a…'), findsOneWidget);
+      await tester.tap(find.text('Press banca'));
+      await waitFor(tester, () => find.text('Deshacer').evaluate().isNotEmpty);
+      expect(c.setById(setId)!.exerciseId, 'bench');
+      expect(c.reps.map((r) => r.exerciseId).toSet(), {'bench'});
+      expect(c.exerciseId, 'squat'); // serie cerrada: el selector no cambia
+
+      await tester.pump(const Duration(milliseconds: 300)); // entra el aviso
+      await tester.tap(find.text('Deshacer'));
+      await waitFor(tester, () => c.setById(setId)!.exerciseId == 'squat');
+      expect(c.setById(setId)!.exerciseId, 'squat');
+      expect(c.reps.map((r) => r.exerciseId).toSet(), {'squat'});
+      await tester.pump(const Duration(seconds: 5)); // deja expirar el aviso
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('detalle de la serie → botón Ejercicio', (tester) async {
+      c.setExercise('squat');
+      await pumpApp(tester, const Size(393, 873));
+      c.onFrame(f(1.0));
+      c.forceNewSet();
+      final setId = c.sets.single.id;
+      await tester.pump(const Duration(seconds: 1));
+
+      await tester.tap(find.byTooltip('Series recientes'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find
+            .descendant(
+              of: find.byType(SetTile),
+              matching: find.byType(ListTile),
+            )
+            .first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Ejercicio'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Peso muerto'));
+      await waitFor(tester, () => c.setById(setId)!.exerciseId == 'deadlift');
+      expect(c.setById(setId)!.exerciseId, 'deadlift');
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.textContaining('Peso muerto ·'), findsWidgets);
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
       'selector de peso en horizontal: Aceptar a la vista y funciona',
       (tester) async {

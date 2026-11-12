@@ -479,6 +479,55 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Cambia el ejercicio de una serie entera (serie y repeticiones). No la
+  /// fusiona con otras. Si es la serie abierta del deportista activo, cambia
+  /// también el ejercicio seleccionado para que la siguiente repetición siga
+  /// en ella. Devuelve cómo estaba, para deshacer con [undoChangeExercise];
+  /// null si no cambió nada.
+  Future<DeletedData?> changeExercise(String setId, String exerciseId) async {
+    final s = setById(setId);
+    if (s == null || s.exerciseId == exerciseId) return null;
+    if (!exercises.any((e) => e.id == exerciseId)) return null;
+    final before = DeletedData([s], repsOfSet(setId));
+    await _replaceSet(s.withExercise(exerciseId), [
+      for (final r in before.reps) r.withExercise(exerciseId),
+    ]);
+    return before;
+  }
+
+  /// Devuelve la serie al ejercicio (y marca de perfil) de antes de
+  /// [changeExercise]. Parte de su estado actual: conserva lo que haya
+  /// cambiado después (deportista, repeticiones nuevas o borradas).
+  Future<void> undoChangeExercise(DeletedData before) async {
+    for (final old in before.sets) {
+      final now = setById(old.id);
+      if (now == null) continue; // borrada mientras tanto
+      await _replaceSet(
+        now.withExercise(old.exerciseId).withProfileMark(old.profileMark),
+        [for (final r in repsOfSet(old.id)) r.withExercise(old.exerciseId)],
+      );
+    }
+  }
+
+  Future<void> _replaceSet(WorkSet s, List<Rep> setReps) async {
+    final i = sets.indexWhere((x) => x.id == s.id);
+    if (i < 0) return;
+    sets[i] = s;
+    for (final r in setReps) {
+      final j = reps.indexWhere((x) => x.id == r.id);
+      if (j >= 0) reps[j] = r;
+    }
+    await repo.saveSetWithReps(s, setReps);
+    final live =
+        s.playerId == activePlayerId && _openSet[_key(s.playerId)] == s.id;
+    if (live && exerciseId != s.exerciseId) {
+      exerciseId = s.exerciseId;
+      _saveSession();
+    }
+    _refreshLive();
+    notifyListeners();
+  }
+
   Future<void> _removeSet(String setId) async {
     sets.removeWhere((s) => s.id == setId);
     reps.removeWhere((r) => r.setId == setId);
@@ -997,7 +1046,7 @@ class AppController extends ChangeNotifier {
   RmTarget? rmTargetForSet(String setId) {
     final s = setById(setId);
     if (s == null) return null;
-    return sessionById(s.sessionId)?.rmTargets[s.exerciseId];
+    return sessionById(s.sessionId)?.rmFor(s.exerciseId);
   }
 
   /// Fija (o quita, con null) el %1RM objetivo de [exerciseId] en la sesión
@@ -1005,9 +1054,9 @@ class AppController extends ChangeNotifier {
   Future<void> setRmTarget(String exerciseId, RmTarget? target) =>
       setSessionTarget([exerciseId], rm: target, loss: _keep);
 
-  /// Fija el objetivo de la sesión activa para [exerciseIds]: rango de %1RM
-  /// ([rm], null = sin objetivo) y pérdida de velocidad máxima ([loss]: un
-  /// valor, [kNoLossLimit], o null = heredar la de la sesión).
+  /// Fija el objetivo de la sesión activa para [exerciseIds]: %1RM ([rm]:
+  /// un rango, [kNoRmTarget] o null = heredar el de la sesión) y pérdida de
+  /// velocidad máxima ([loss]: un valor, [kNoLossLimit] o null = heredar).
   Future<void> setSessionTarget(
     List<String> exerciseIds, {
     Object? rm = _keep,
@@ -1034,16 +1083,31 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// «Guardar en todos»: copia [rm] a todos los ejercicios y, para la
-  /// pérdida, la pone como general de la sesión ([loss] null = dejar la
-  /// general como está) y quita las sobrescrituras por ejercicio.
+  /// Objetivo general de la sesión activa: %1RM ([rm], null o
+  /// [kNoRmTarget] = sin objetivo) y pérdida ([loss], [kNoLossLimit] = sin
+  /// límite). Los ejercicios que no lo sobrescriben lo heredan.
+  Future<void> setSessionGeneral({
+    required RmTarget? rm,
+    required double loss,
+  }) async {
+    final s = activeSession;
+    if (s == null) return;
+    await _replaceSession(s.withRmGeneral(rm).copyWith(lossGeneral: loss));
+    notifyListeners();
+  }
+
+  /// «Guardar en todos»: lo elegido pasa a ser el objetivo general de la
+  /// sesión y se quitan los objetivos propios de todos los ejercicios. Con
+  /// [rm] o [loss] null (heredar) la general correspondiente no cambia.
   Future<void> applyTargetToAll({RmTarget? rm, double? loss}) async {
     var s = activeSession;
     if (s == null) return;
-    for (final e in exercises) {
-      s = s!.withRmTarget(e.id, rm);
-    }
-    s = s!.copyWith(lossGeneral: loss ?? s.lossGeneral, lossTargets: const {});
+    if (rm != null) s = s.withRmGeneral(rm);
+    s = s.copyWith(
+      lossGeneral: loss ?? s.lossGeneral,
+      rmTargets: const {},
+      lossTargets: const {},
+    );
     await _replaceSession(s);
     notifyListeners();
   }

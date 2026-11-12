@@ -60,7 +60,7 @@ String lossLimitText(double loss) =>
 /// "75–80 % · pérdida ≤ 20 %", "75–80 %", "pérdida ≤ 20 %" o
 /// "sin límite de pérdida".
 String sessionTargetText(RmTarget? rm, double? loss) => [
-  if (rm != null) rmTargetText(rm),
+  if (rm != null) rm.isNone ? 'sin %1RM' : rmTargetText(rm),
   if (loss != null)
     loss.isInfinite ? 'sin límite de pérdida' : 'pérdida ≤ ${kg(loss)} %',
 ].join(' · ');

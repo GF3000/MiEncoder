@@ -108,7 +108,7 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const Key('rm-target-save')));
     await tester.pumpAndSettle();
-    expect(result!.rm, isNull);
+    expect(result!.rm, kNoRmTarget); // «Sin objetivo» explícito, no heredar
     expect(result!.applyToAll, isFalse);
 
     await openWith();

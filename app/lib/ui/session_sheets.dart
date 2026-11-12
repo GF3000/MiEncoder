@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 import '../app_controller.dart';
 import '../core/models.dart';
 import 'common.dart';
-import 'value_sheets.dart';
 
 /// Normaliza para buscar sin tildes ni mayúsculas.
 String _norm(String s) {
@@ -257,53 +256,76 @@ Future<void> showSessionSheet(BuildContext context, AppController c) {
               ),
               if (s != null) ...[
                 ListTile(
-                  key: const Key('session-loss'),
-                  leading: const Icon(Icons.trending_down),
-                  title: const Text('Pérdida de velocidad'),
-                  subtitle: const Text(
-                    'Para todos los ejercicios de la sesión salvo los que la cambien',
+                  key: const Key('session-general'),
+                  leading: const Icon(Icons.tune),
+                  title: const Text('Objetivo de la sesión'),
+                  subtitle: Text(
+                    '${s.rmGeneral == null ? 'Sin %1RM' : rmTargetText(s.rmGeneral!)}'
+                    '  ·  pérdida ${lossLimitText(s.lossGeneral).toLowerCase()}',
+                    style: const TextStyle(fontSize: 16),
                   ),
-                  trailing: Text(
-                    lossLimitText(s.lossGeneral),
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  onTap: () async {
-                    final v = await askSessionLoss(ctx, s.lossGeneral);
-                    if (v != null) await c.setSessionLoss(v);
-                  },
+                  trailing: const Icon(Icons.edit_outlined),
+                  onTap: () => editSessionGeneral(ctx, c),
                 ),
-                const _Section('Objetivo por ejercicio'),
-                for (final e in c.exercises)
-                  Builder(
-                    builder: (_) {
-                      final rm = s.rmTargets[e.id];
-                      // Solo se muestra la pérdida si el ejercicio la cambia.
-                      final loss = s.lossTargets[e.id];
-                      final has = rm != null || loss != null;
-                      return ListTile(
-                        key: Key('rm-target-${e.id}'),
-                        dense: true,
-                        leading: Icon(
-                          Icons.speed,
-                          color: has
-                              ? Theme.of(ctx).colorScheme.primary
-                              : Colors.white38,
+                // Plegado: solo se abre para cambiar algún ejercicio.
+                Theme(
+                  data: Theme.of(
+                    ctx,
+                  ).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    key: const Key('exercise-targets'),
+                    leading: const Icon(Icons.fitness_center),
+                    title: const Text('Objetivo por ejercicio'),
+                    subtitle: Text(switch (c.exercises
+                        .where(
+                          (e) =>
+                              s.rmTargets.containsKey(e.id) ||
+                              s.lossTargets.containsKey(e.id),
+                        )
+                        .length) {
+                      0 => 'Todos usan el de la sesión',
+                      1 => '1 ejercicio con objetivo propio',
+                      final n => '$n ejercicios con objetivo propio',
+                    }),
+                    children: [
+                      for (final e in c.exercises)
+                        Builder(
+                          builder: (_) {
+                            // Solo lo que el ejercicio cambia respecto a la
+                            // sesión.
+                            final rm = s.rmTargets[e.id];
+                            final loss = s.lossTargets[e.id];
+                            final has = rm != null || loss != null;
+                            return ListTile(
+                              key: Key('rm-target-${e.id}'),
+                              dense: true,
+                              contentPadding: const EdgeInsets.only(
+                                left: 32,
+                                right: 16,
+                              ),
+                              leading: Icon(
+                                Icons.speed,
+                                color: has
+                                    ? Theme.of(ctx).colorScheme.primary
+                                    : Colors.white38,
+                              ),
+                              title: Text(e.name),
+                              trailing: Text(
+                                has
+                                    ? sessionTargetText(rm, loss)
+                                    : 'Como la sesión',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  color: has ? null : Colors.white54,
+                                ),
+                              ),
+                              onTap: () => editExerciseTarget(ctx, c, e),
+                            );
+                          },
                         ),
-                        title: Text(e.name),
-                        trailing: Text(
-                          has ? sessionTargetText(rm, loss) : 'Sin objetivo',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: has ? null : Colors.white54,
-                          ),
-                        ),
-                        onTap: () => editExerciseTarget(ctx, c, e),
-                      );
-                    },
+                    ],
                   ),
+                ),
               ],
               if (recent.isNotEmpty)
                 const _Section('Retomar una sesión anterior'),
@@ -393,7 +415,7 @@ Future<void> askContinueOrNewSession(
 }
 
 /// Abre el panel de objetivo de [e] en la sesión activa y guarda lo
-/// elegido («Guardar» solo en [e], «Guardar en todos» en todos).
+/// elegido («Guardar» solo en [e], «Guardar en todos» como general).
 Future<void> editExerciseTarget(
   BuildContext context,
   AppController c,
@@ -406,6 +428,7 @@ Future<void> editExerciseTarget(
     exerciseName: e.name,
     rm: s.rmTargets[e.id],
     loss: s.lossTargets[e.id],
+    sessionRm: s.rmGeneral,
     sessionLoss: s.lossGeneral,
   );
   if (r == null) return;
@@ -416,17 +439,34 @@ Future<void> editExerciseTarget(
   }
 }
 
-/// Resultado del panel de objetivo. [rm] null = sin objetivo; [loss]: un
-/// valor, [kNoLossLimit] (sin límite) o null (heredar la de la sesión).
+/// Abre el panel del objetivo general de la sesión activa y lo guarda.
+Future<void> editSessionGeneral(BuildContext context, AppController c) async {
+  final s = c.activeSession;
+  if (s == null) return;
+  final r = await askSessionTarget(
+    context,
+    general: true,
+    rm: s.rmGeneral,
+    loss: s.lossGeneral,
+    sessionRm: s.rmGeneral,
+    sessionLoss: s.lossGeneral,
+  );
+  if (r == null) return;
+  await c.setSessionGeneral(rm: r.rm, loss: r.loss ?? s.lossGeneral);
+}
+
+/// Resultado del panel de objetivo. En un ejercicio, [rm] es un rango,
+/// [kNoRmTarget] (sin objetivo) o null (heredar el de la sesión), y [loss]
+/// un valor, [kNoLossLimit] (sin límite) o null (heredar). En el general,
+/// [rm] null = sin objetivo y [loss] siempre tiene valor.
 typedef SessionTargetChoice = ({RmTarget? rm, double? loss, bool applyToAll});
 
-/// Rangos de intensidad habituales en VBT (null = sin objetivo).
-const List<(String, RmTarget?)> kRmPresets = [
+/// Rangos de intensidad habituales en VBT.
+const List<(String, RmTarget)> kRmPresets = [
   ('Potencia', RmTarget(50, 65)),
   ('Hipertrofia', RmTarget(65, 75)),
   ('Fuerza-hip.', RmTarget(75, 85)),
   ('Fuerza', RmTarget(85, 95)),
-  ('Sin objetivo', null),
 ];
 
 /// Pérdidas de velocidad máximas de un toque.
@@ -435,13 +475,17 @@ const List<double> kLossPresets = [10, 15, 20, 25, 30, 40];
 /// Límites del deslizador de %1RM.
 const double _rmMin = 30, _rmMax = 100;
 
-/// Panel (sin teclado) con el objetivo de un ejercicio en la sesión: rango
-/// de %1RM y pérdida de velocidad máxima. null = cancelar.
+/// Panel (sin teclado) con el objetivo de la sesión ([general]) o de un
+/// ejercicio: rango de %1RM y pérdida de velocidad máxima. En un ejercicio
+/// se puede heredar lo de la sesión ([sessionRm], [sessionLoss]). null =
+/// cancelar.
 Future<SessionTargetChoice?> askSessionTarget(
   BuildContext context, {
-  required String exerciseName,
+  String exerciseName = '',
+  bool general = false,
   RmTarget? rm,
   double? loss,
+  RmTarget? sessionRm,
   required double sessionLoss,
 }) {
   return showModalBottomSheet<SessionTargetChoice>(
@@ -450,8 +494,10 @@ Future<SessionTargetChoice?> askSessionTarget(
     isScrollControlled: true,
     builder: (ctx) => _TargetSheet(
       exerciseName: exerciseName,
+      general: general,
       rm: rm,
       loss: loss,
+      sessionRm: sessionRm,
       sessionLoss: sessionLoss,
     ),
   );
@@ -459,16 +505,21 @@ Future<SessionTargetChoice?> askSessionTarget(
 
 class _TargetSheet extends StatefulWidget {
   final String exerciseName;
+  final bool general;
   final RmTarget? rm;
   final double? loss;
 
-  /// Pérdida general de la sesión ([kNoLossLimit] = sin límite).
+  /// Objetivo general de la sesión (null = sin %1RM; [kNoLossLimit] = sin
+  /// límite de pérdida).
+  final RmTarget? sessionRm;
   final double sessionLoss;
 
   const _TargetSheet({
     required this.exerciseName,
+    required this.general,
     this.rm,
     this.loss,
+    this.sessionRm,
     required this.sessionLoss,
   });
 
@@ -477,20 +528,43 @@ class _TargetSheet extends StatefulWidget {
 }
 
 class _TargetSheetState extends State<_TargetSheet> {
-  late RmTarget? rm = widget.rm == null
-      ? null
+  static RmTarget? _clamp(RmTarget? r) => r == null || r.isNone
+      ? r
       : RmTarget(
-          widget.rm!.min.clamp(_rmMin, _rmMax).toDouble(),
-          widget.rm!.max.clamp(_rmMin, _rmMax).toDouble(),
+          r.min.clamp(_rmMin, _rmMax).toDouble(),
+          r.max.clamp(_rmMin, _rmMax).toDouble(),
         );
+
+  /// En un ejercicio: null = heredar, [kNoRmTarget] = sin objetivo. En el
+  /// general: null = sin objetivo.
+  late RmTarget? rm = _clamp(widget.rm);
   late double? loss = widget.loss;
 
   /// Último rango usado, para que el deslizador no salte al quitar el
   /// objetivo y volver a ponerlo.
-  late RmTarget lastRm = rm ?? const RmTarget(70, 80);
+  late RmTarget lastRm = _effectiveRm ?? const RmTarget(70, 80);
+
+  bool get _general => widget.general;
+
+  /// %1RM que se aplicaría con lo elegido (null = sin objetivo).
+  RmTarget? get _effectiveRm {
+    if (rm == null) return _general ? null : _clamp(widget.sessionRm);
+    return rm!.isNone ? null : rm;
+  }
+
+  bool get _noRm => _general ? rm == null : rm == kNoRmTarget;
 
   void _done(bool all) =>
       Navigator.pop(context, (rm: rm, loss: loss, applyToAll: all));
+
+  String _rmValue() {
+    if (!_general && rm == null) {
+      final s = widget.sessionRm;
+      return 'Sesión · ${s == null ? 'sin objetivo' : rmTargetText(s)}';
+    }
+    final e = _effectiveRm;
+    return e == null ? 'Sin objetivo' : rmTargetText(e);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -507,18 +581,23 @@ class _TargetSheetState extends State<_TargetSheet> {
       textBaseline: TextBaseline.alphabetic,
       children: [
         Expanded(child: Text(title, style: theme.textTheme.titleMedium)),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.w700,
-            color: dim ? Colors.white54 : primary,
+        Flexible(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w700,
+              color: dim ? Colors.white54 : primary,
+            ),
           ),
         ),
       ],
     );
 
-    final slider = rm ?? lastRm;
+    final effective = _effectiveRm;
+    final slider = effective ?? lastRm;
+    final sessionRm = widget.sessionRm;
     return SafeArea(
       top: false,
       child: Column(
@@ -531,14 +610,26 @@ class _TargetSheetState extends State<_TargetSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Objetivo · ${widget.exerciseName}',
+                    _general
+                        ? 'Objetivo de la sesión'
+                        : 'Objetivo · ${widget.exerciseName}',
                     style: theme.textTheme.titleLarge,
                   ),
+                  if (_general)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Para todos los ejercicios salvo los que tengan uno '
+                        'propio. La pérdida pasa a la sesión siguiente; el '
+                        '%1RM no.',
+                        style: TextStyle(fontSize: 13, color: Colors.white60),
+                      ),
+                    ),
                   const SizedBox(height: 16),
                   header(
                     'Intensidad (%1RM)',
-                    rm == null ? 'Sin objetivo' : rmTargetText(rm!),
-                    dim: rm == null,
+                    _rmValue(),
+                    dim: effective == null || (!_general && rm == null),
                   ),
                   const SizedBox(height: 8),
                   Wrap(
@@ -548,14 +639,25 @@ class _TargetSheetState extends State<_TargetSheet> {
                       for (final (i, (label, t)) in kRmPresets.indexed)
                         ChoiceChip(
                           key: Key('rm-preset-$i'),
-                          label: Text(
-                            t == null ? label : '$label ${rmTargetText(t)}',
-                          ),
+                          label: Text('$label ${rmTargetText(t)}'),
                           selected: rm == t,
-                          onSelected: (_) => setState(() {
-                            rm = t;
-                            if (t != null) lastRm = t;
-                          }),
+                          onSelected: (_) => setState(() => rm = lastRm = t),
+                        ),
+                      ChoiceChip(
+                        key: Key('rm-preset-${kRmPresets.length}'),
+                        label: const Text('Sin objetivo'),
+                        selected: _noRm,
+                        onSelected: (_) =>
+                            setState(() => rm = _general ? null : kNoRmTarget),
+                      ),
+                      if (!_general)
+                        ChoiceChip(
+                          key: const Key('rm-inherit'),
+                          label: Text(
+                            'Sesión (${sessionRm == null ? 'sin objetivo' : rmTargetText(sessionRm)})',
+                          ),
+                          selected: rm == null,
+                          onSelected: (_) => setState(() => rm = null),
                         ),
                     ],
                   ),
@@ -569,7 +671,7 @@ class _TargetSheetState extends State<_TargetSheet> {
                       '${kg(slider.min)} %',
                       '${kg(slider.max)} %',
                     ),
-                    activeColor: rm == null ? Colors.white24 : null,
+                    activeColor: effective == null ? Colors.white24 : null,
                     onChanged: (v) => setState(() {
                       rm = lastRm = RmTarget(
                         v.start.roundToDouble(),
@@ -603,14 +705,15 @@ class _TargetSheetState extends State<_TargetSheet> {
                         selected: loss == kNoLossLimit,
                         onSelected: (_) => setState(() => loss = kNoLossLimit),
                       ),
-                      ChoiceChip(
-                        key: const Key('loss-default'),
-                        label: Text(
-                          'Sesión (${lossLimitText(widget.sessionLoss)})',
+                      if (!_general)
+                        ChoiceChip(
+                          key: const Key('loss-default'),
+                          label: Text(
+                            'Sesión (${lossLimitText(widget.sessionLoss)})',
+                          ),
+                          selected: loss == null,
+                          onSelected: (_) => setState(() => loss = null),
                         ),
-                        selected: loss == null,
-                        onSelected: (_) => setState(() => loss = null),
-                      ),
                     ],
                   ),
                 ],
@@ -627,12 +730,14 @@ class _TargetSheetState extends State<_TargetSheet> {
                   child: const Text('Cancelar'),
                 ),
                 const Spacer(),
-                OutlinedButton(
-                  key: const Key('rm-target-save-all'),
-                  onPressed: () => _done(true),
-                  child: const Text('Guardar en todos'),
-                ),
-                const SizedBox(width: 8),
+                if (!_general) ...[
+                  OutlinedButton(
+                    key: const Key('rm-target-save-all'),
+                    onPressed: () => _done(true),
+                    child: const Text('Guardar en todos'),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 FilledButton(
                   key: const Key('rm-target-save'),
                   onPressed: () => _done(false),
@@ -645,48 +750,4 @@ class _TargetSheetState extends State<_TargetSheet> {
       ),
     );
   }
-}
-
-/// Pérdida de velocidad general de la sesión, con botones de un toque.
-/// Devuelve el valor ([kNoLossLimit] = sin límite) o null si se cancela.
-Future<double?> askSessionLoss(BuildContext context, double current) {
-  return showModalBottomSheet<double>(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (ctx) => SheetScaffold(
-      title: 'Pérdida de velocidad de la sesión',
-      content: [
-        ValueHeader('Actual', lossLimitText(current)),
-        const SizedBox(height: 4),
-        const Text(
-          'Se aplica a todos los ejercicios salvo los que la cambien en su '
-          'objetivo. La sesión siguiente empieza con esta.',
-          style: TextStyle(fontSize: 13, color: Colors.white60),
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final l in [...kLossPresets, kNoLossLimit])
-              ChoiceChip(
-                key: Key(
-                  l.isInfinite ? 'session-loss-off' : 'session-loss-${kg(l)}',
-                ),
-                label: Text(lossLimitText(l)),
-                selected: l == current,
-                onSelected: (_) => Navigator.pop(ctx, l),
-              ),
-          ],
-        ),
-      ],
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Cancelar'),
-        ),
-      ],
-    ),
-  );
 }

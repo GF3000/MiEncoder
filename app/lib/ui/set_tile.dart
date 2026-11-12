@@ -21,9 +21,10 @@ Widget swipeDeleteBackground() => Container(
   ),
 );
 
-/// Una serie con su resumen. Toque = ver/corregir sus repeticiones;
-/// botón de la derecha = reasignar la serie entera; deslizar a la izquierda = borrar
-/// (con "Deshacer").
+/// Una serie con su resumen. Toque = ver/corregir sus repeticiones (y
+/// cambiar su ejercicio); botón de la derecha = reasignar la serie entera;
+/// mantener pulsado = cambiar ejercicio o borrar; deslizar a la izquierda =
+/// borrar (con "Deshacer").
 class SetTile extends StatelessWidget {
   final AppController c;
   final WorkSet set;
@@ -64,7 +65,7 @@ class SetTile extends StatelessWidget {
       onDismissed: (_) => delete(),
       child: ListTile(
         onLongPress: () async {
-          final ok = await showModalBottomSheet<bool>(
+          final action = await showModalBottomSheet<String>(
             context: context,
             showDragHandle: true,
             builder: (ctx) => SafeArea(
@@ -80,6 +81,11 @@ class SetTile extends StatelessWidget {
                     ),
                   ),
                   ListTile(
+                    leading: const Icon(Icons.fitness_center),
+                    title: const Text('Cambiar ejercicio'),
+                    onTap: () => Navigator.pop(ctx, 'exercise'),
+                  ),
+                  ListTile(
                     leading: const Icon(
                       Icons.delete_outline,
                       color: Colors.red,
@@ -88,13 +94,16 @@ class SetTile extends StatelessWidget {
                       'Eliminar serie (${rs.length} rep${rs.length == 1 ? '' : 's'})',
                       style: const TextStyle(color: Colors.red),
                     ),
-                    onTap: () => Navigator.pop(ctx, true),
+                    onTap: () => Navigator.pop(ctx, 'delete'),
                   ),
                 ],
               ),
             ),
           );
-          if (ok == true) await delete();
+          if (action == 'delete') await delete();
+          if (action == 'exercise' && context.mounted) {
+            await changeSetExercise(context, c, set.id);
+          }
         },
         leading: CircleAvatar(
           backgroundColor: fatigueColor(level).withValues(alpha: 0.25),
@@ -196,6 +205,71 @@ Future<PickedPlayer?> pickPlayer(
   );
 }
 
+Future<String?> pickExercise(
+  BuildContext context,
+  AppController c, {
+  required String current,
+  required String title,
+}) {
+  return showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (ctx) => SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(ctx).size.height * 0.7,
+        ),
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(title, style: Theme.of(ctx).textTheme.titleMedium),
+            ),
+            for (final e in c.exercises)
+              ListTile(
+                leading: const Icon(Icons.fitness_center),
+                title: Text(e.name),
+                selected: current == e.id,
+                onTap: () => Navigator.pop(ctx, e.id),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// Elige otro ejercicio para la serie [setId] y lo aplica, con "Deshacer"
+/// en el [ScaffoldMessenger] de [context].
+Future<void> changeSetExercise(
+  BuildContext context,
+  AppController c,
+  String setId,
+) async {
+  final set = c.setById(setId);
+  if (set == null) return;
+  final messenger = ScaffoldMessenger.of(context);
+  final theme = Theme.of(context);
+  final id = await pickExercise(
+    context,
+    c,
+    current: set.exerciseId,
+    title: 'Cambiar el ejercicio de la serie a…',
+  );
+  if (id == null) return;
+  final before = await c.changeExercise(setId, id);
+  if (before == null || !messenger.mounted) return;
+  showAppSnackOn(
+    messenger,
+    theme,
+    'Serie pasada a ${c.exerciseById(id).name}',
+    actionLabel: 'Deshacer',
+    onAction: () => c.undoChangeExercise(before),
+  );
+}
+
 /// Borra una repetición y ofrece deshacer en [messenger].
 Future<void> deleteRepWithUndo(
   ScaffoldMessengerState messenger,
@@ -245,11 +319,22 @@ Future<void> showSetDetail(
               controller: sc,
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-                  child: Text(
-                    '${c.exerciseById(set.exerciseId).name} · ${kg(rs.first.loadKg)} kg · '
-                    '${c.playerById(set.playerId)?.name ?? 'Sin asignar'}',
-                    style: Theme.of(ctx).textTheme.titleMedium,
+                  padding: const EdgeInsets.fromLTRB(16, 0, 8, 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${c.exerciseById(set.exerciseId).name} · ${kg(rs.first.loadKg)} kg · '
+                          '${c.playerById(set.playerId)?.name ?? 'Sin asignar'}',
+                          style: Theme.of(ctx).textTheme.titleMedium,
+                        ),
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.fitness_center, size: 18),
+                        label: const Text('Ejercicio'),
+                        onPressed: () => changeSetExercise(ctx, c, setId),
+                      ),
+                    ],
                   ),
                 ),
                 const Padding(

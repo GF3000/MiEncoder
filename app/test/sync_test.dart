@@ -229,6 +229,46 @@ void main() {
     expect(reps, {'r1': 's1', 'r2': 's2'});
   });
 
+  test('cambiar el ejercicio sube la serie con sus reps cambiadas', () async {
+    await a.repo.saveSet(set('s1', playerId: 'p1'));
+    await a.repo.saveRep(rep('r1', 's1'));
+    await a.repo.saveRep(rep('r2', 's1'));
+    await a.sync();
+    await b.sync();
+
+    a.now = 2000;
+    final reps = [for (final r in await a.repo.reps()) r.withExercise('bench')];
+    final s = (await a.repo.sets()).single.withExercise('bench');
+    await a.repo.saveSetWithReps(s, reps);
+    final out = await a.repo.outgoing('sets');
+    expect(out.single['exerciseId'], 'bench');
+    expect((out.single['reps'] as List).map((r) => (r as Map)['exerciseId']), [
+      'bench',
+      'bench',
+    ]);
+
+    await a.sync();
+    await b.sync();
+    expect((await b.repo.sets()).single.exerciseId, 'bench');
+    expect((await b.repo.reps()).map((r) => r.exerciseId).toSet(), {'bench'});
+  });
+
+  test(
+    'una versión remota antigua no deshace el cambio de ejercicio',
+    () async {
+      await a.repo.saveSet(set('s1'));
+      await a.repo.saveRep(rep('r1', 's1'));
+      await a.sync();
+      a.now = 3000;
+      await a.repo.saveSetWithReps(set('s1').withExercise('bench'), [
+        rep('r1', 's1').withExercise('bench'),
+      ]);
+      final old = Map<String, Object?>.of(remote.data['$uid/sets']!['s1']!);
+      expect(await a.repo.applyRemote('sets', old), isFalse);
+      expect((await a.repo.reps()).single.exerciseId, 'bench');
+    },
+  );
+
   test('sin conexión no se pierde nada: queda pendiente', () async {
     await a.repo.savePlayer(const Player(id: 'p1', name: 'Ana'));
     await a.sync(); // primera subida

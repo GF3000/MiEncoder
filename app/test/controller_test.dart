@@ -3,6 +3,7 @@ import 'package:sembast/sembast_memory.dart';
 import 'package:miencoder/app_controller.dart';
 import 'package:miencoder/core/analysis.dart';
 import 'package:miencoder/core/frame_parser.dart';
+import 'package:miencoder/core/models.dart';
 import 'package:miencoder/services/encoder.dart';
 import 'package:miencoder/services/feedback.dart';
 import 'package:miencoder/services/repository.dart';
@@ -258,6 +259,130 @@ void main() {
       c.reassign(c.recentSets().single.id, ana.id);
       expect([0, 1].map(playerOfRep).toList(), [ana.id, ana.id]);
     });
+  });
+
+  group('Cambiar el ejercicio de una serie', () {
+    // Serie de Ana en sentadilla con dos reps, ya cerrada (del historial).
+    Future<(String, String)> historySet() async {
+      final ana = await c.addPlayer('Ana');
+      c.setExercise('squat');
+      c.setActive(ana.id);
+      c.onFrame(f(1.0));
+      c.onFrame(f(0.9));
+      final setId = c.reps.last.setId;
+      c.forceNewSet();
+      return (ana.id, setId);
+    }
+
+    test('cambia la serie y todas sus reps, y persiste', () async {
+      final (_, setId) = await historySet();
+      expect(await c.changeExercise(setId, 'bench'), isNotNull);
+      expect(c.setById(setId)!.exerciseId, 'bench');
+      expect(c.repsOfSet(setId).map((r) => r.exerciseId), ['bench', 'bench']);
+
+      final c2 = await build();
+      expect(c2.setById(setId)!.exerciseId, 'bench');
+      expect(c2.repsOfSet(setId).map((r) => r.exerciseId), ['bench', 'bench']);
+    });
+
+    test('el perfil pasa del ejercicio viejo al nuevo', () async {
+      final (ana, setId) = await historySet();
+      await c.changeExercise(setId, 'bench');
+      expect(c.repsFor(playerId: ana, exerciseId: 'squat'), isEmpty);
+      expect(c.repsFor(playerId: ana, exerciseId: 'bench').length, 2);
+    });
+
+    test(
+      'usa el objetivo y la pérdida de la sesión del ejercicio nuevo',
+      () async {
+        final (_, setId) = await historySet();
+        await c.setSessionTarget(
+          ['bench'],
+          rm: const RmTarget(70, 75),
+          loss: 10.0,
+        );
+        expect(c.rmTargetForSet(setId), isNull);
+        await c.changeExercise(setId, 'bench');
+        expect(c.rmTargetForSet(setId)!.min, 70);
+        expect(c.lossThresholdForSet(setId), 10.0);
+      },
+    );
+
+    test(
+      'mover una rep después la lleva a una serie del ejercicio nuevo',
+      () async {
+        final (_, setId) = await historySet();
+        final ben = await c.addPlayer('Ben');
+        await c.changeExercise(setId, 'bench');
+        await c.moveRep(c.repsOfSet(setId).first.id, ben.id);
+        final moved = c.sets.firstWhere((s) => s.playerId == ben.id);
+        expect(moved.exerciseId, 'bench');
+      },
+    );
+
+    test(
+      'la serie del historial no cambia el ejercicio seleccionado',
+      () async {
+        final (_, setId) = await historySet();
+        await c.changeExercise(setId, 'bench');
+        expect(c.exerciseId, 'squat');
+      },
+    );
+
+    test('la serie en vivo cambia el selector y sigue abierta', () async {
+      final ana = await c.addPlayer('Ana');
+      c.setExercise('squat');
+      c.setActive(ana.id);
+      c.onFrame(f(1.0));
+      final setId = c.reps.last.setId;
+      await c.changeExercise(setId, 'bench');
+      expect(c.exerciseId, 'bench');
+      c.onFrame(f(0.95));
+      expect(c.reps.last.setId, setId);
+      expect(c.reps.last.exerciseId, 'bench');
+      expect(c.lastLive!.indexInSet, 2);
+    });
+
+    test('quita la marca de perfil', () async {
+      final (_, setId) = await historySet();
+      c.setProfileMark(setId, ProfileMark.exclude);
+      await c.changeExercise(setId, 'bench');
+      expect(c.setById(setId)!.profileMark, isNull);
+    });
+
+    test('deshacer devuelve ejercicio y marca, también en reps', () async {
+      final (_, setId) = await historySet();
+      c.setProfileMark(setId, ProfileMark.include);
+      final before = await c.changeExercise(setId, 'bench');
+      await c.undoChangeExercise(before!);
+      expect(c.setById(setId)!.exerciseId, 'squat');
+      expect(c.setById(setId)!.profileMark, ProfileMark.include);
+      expect(c.repsOfSet(setId).map((r) => r.exerciseId), ['squat', 'squat']);
+    });
+
+    test('deshacer en vivo incluye las reps hechas después', () async {
+      final ana = await c.addPlayer('Ana');
+      c.setExercise('squat');
+      c.setActive(ana.id);
+      c.onFrame(f(1.0));
+      final setId = c.reps.last.setId;
+      final before = await c.changeExercise(setId, 'bench');
+      c.onFrame(f(0.95));
+      await c.undoChangeExercise(before!);
+      expect(c.repsOfSet(setId).map((r) => r.exerciseId), ['squat', 'squat']);
+      expect(c.exerciseId, 'squat');
+    });
+
+    test(
+      'sin cambios: mismo ejercicio, ejercicio o serie inexistentes',
+      () async {
+        final (_, setId) = await historySet();
+        expect(await c.changeExercise(setId, 'squat'), isNull);
+        expect(await c.changeExercise(setId, 'nope'), isNull);
+        expect(await c.changeExercise('nope', 'bench'), isNull);
+        expect(c.setById(setId)!.exerciseId, 'squat');
+      },
+    );
   });
 
   test('deshacer borra la última rep y la serie si queda vacía', () async {

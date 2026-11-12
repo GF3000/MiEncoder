@@ -118,9 +118,9 @@ class Rep {
 
   double velocity(VelocityMetric m) => m == VelocityMetric.mpv ? mpv : mv;
 
-  Rep inSet(String newSetId) => Rep(
+  Rep _copy({String? setId, String? exerciseId}) => Rep(
     id: id,
-    setId: newSetId,
+    setId: setId ?? this.setId,
     time: time,
     romCm: romCm,
     mv: mv,
@@ -128,8 +128,12 @@ class Rep {
     vmax: vmax,
     vmaxTruncated: vmaxTruncated,
     loadKg: loadKg,
-    exerciseId: exerciseId,
+    exerciseId: exerciseId ?? this.exerciseId,
   );
+
+  Rep inSet(String newSetId) => _copy(setId: newSetId);
+
+  Rep withExercise(String exerciseId) => _copy(exerciseId: exerciseId);
 
   /// Potencia media aproximada (W) = masa * g * velocidad media.
   double get meanPowerW => loadKg * 9.81 * mv;
@@ -188,13 +192,14 @@ class WorkSet {
   });
 
   WorkSet _copy({
+    String? exerciseId,
     String? Function()? playerId,
     String? Function()? sessionId,
     ProfileMark? Function()? profileMark,
   }) => WorkSet(
     id: id,
     start: start,
-    exerciseId: exerciseId,
+    exerciseId: exerciseId ?? this.exerciseId,
     playerId: playerId != null ? playerId() : this.playerId,
     sessionId: sessionId != null ? sessionId() : this.sessionId,
     profileMark: profileMark != null ? profileMark() : this.profileMark,
@@ -205,6 +210,11 @@ class WorkSet {
   WorkSet withSession(String? sessionId) => _copy(sessionId: () => sessionId);
 
   WorkSet withProfileMark(ProfileMark? mark) => _copy(profileMark: () => mark);
+
+  /// Copia con otro ejercicio. Quita la marca de perfil: se decidió mirando
+  /// el perfil del ejercicio anterior.
+  WorkSet withExercise(String exerciseId) =>
+      _copy(exerciseId: exerciseId, profileMark: () => null);
 
   Map<String, Object?> toJson() => {
     'id': id,
@@ -236,10 +246,14 @@ class RmTarget {
 
   bool contains(double percent) => percent >= min && percent <= max;
 
-  List<double> toJson() => [min, max];
+  /// true para [kNoRmTarget] ("sin objetivo" explícito en un ejercicio).
+  bool get isNone => min == 0 && max == 0;
 
-  /// null si el JSON no es un rango válido.
+  Object toJson() => isNone ? 'off' : [min, max];
+
+  /// null si el JSON no es un rango válido. 'off' = [kNoRmTarget].
   static RmTarget? fromJson(Object? j) {
+    if (j == 'off') return kNoRmTarget;
     if (j is! List || j.length != 2) return null;
     final [a, b] = j;
     if (a is! num || b is! num) return null;
@@ -253,6 +267,10 @@ class RmTarget {
   @override
   int get hashCode => Object.hash(min, max);
 }
+
+/// Objetivo de %1RM "sin objetivo" en un ejercicio, distinto de heredar el
+/// de la sesión.
+const RmTarget kNoRmTarget = RmTarget(0, 0);
 
 /// Pérdida de velocidad "sin límite": sin avisos de fatiga (la pérdida se
 /// sigue mostrando como dato).
@@ -279,7 +297,11 @@ class TrainingSession {
   /// Deportistas convocados, en el orden en que se añadieron.
   final List<String> playerIds;
 
-  /// Intensidad objetivo por ejercicio (id → rango de %1RM).
+  /// Intensidad objetivo de toda la sesión (null = sin objetivo).
+  final RmTarget? rmGeneral;
+
+  /// %1RM por ejercicio que sobrescribe [rmGeneral]: un rango o
+  /// [kNoRmTarget]. Sin entrada, el ejercicio hereda el de la sesión.
   final Map<String, RmTarget> rmTargets;
 
   /// Pérdida de velocidad máxima (%) de toda la sesión; [kNoLossLimit] =
@@ -295,6 +317,7 @@ class TrainingSession {
     required this.name,
     required this.start,
     this.playerIds = const [],
+    this.rmGeneral,
     this.rmTargets = const {},
     this.lossGeneral = kDefaultSessionLoss,
     this.lossTargets = const {},
@@ -311,15 +334,37 @@ class TrainingSession {
     name: name ?? this.name,
     start: start,
     playerIds: playerIds ?? this.playerIds,
+    rmGeneral: rmGeneral,
     rmTargets: rmTargets ?? this.rmTargets,
     lossGeneral: lossGeneral ?? this.lossGeneral,
     lossTargets: lossTargets ?? this.lossTargets,
   );
 
+  /// Cambia el %1RM general (null = sin objetivo).
+  TrainingSession withRmGeneral(RmTarget? rm) => TrainingSession(
+    id: id,
+    name: name,
+    start: start,
+    playerIds: playerIds,
+    rmGeneral: rm == null || rm.isNone ? null : rm,
+    rmTargets: rmTargets,
+    lossGeneral: lossGeneral,
+    lossTargets: lossTargets,
+  );
+
+  /// %1RM que se aplica a [exerciseId]: el suyo o el de la sesión. null =
+  /// sin objetivo.
+  RmTarget? rmFor(String exerciseId) {
+    final own = rmTargets[exerciseId];
+    if (own == null) return rmGeneral;
+    return own.isNone ? null : own;
+  }
+
   /// Pérdida que se aplica a [exerciseId] ([kNoLossLimit] = sin límite).
   double lossFor(String exerciseId) => lossTargets[exerciseId] ?? lossGeneral;
 
-  /// Fija (o quita, con null) el objetivo de un ejercicio.
+  /// Sobrescribe el %1RM de un ejercicio (un rango o [kNoRmTarget]);
+  /// null = heredar el de la sesión.
   TrainingSession withRmTarget(String exerciseId, RmTarget? t) => copyWith(
     rmTargets: {
       for (final e in rmTargets.entries)
@@ -343,6 +388,7 @@ class TrainingSession {
     'name': name,
     'start': start.millisecondsSinceEpoch,
     'players': playerIds,
+    if (rmGeneral != null) 'rmGeneral': rmGeneral!.toJson(),
     if (rmTargets.isNotEmpty)
       'rmTargets': {for (final e in rmTargets.entries) e.key: e.value.toJson()},
     'lossGeneral': _lossToJson(lossGeneral),
@@ -365,6 +411,10 @@ class TrainingSession {
     playerIds: [
       for (final p in (j['players'] as List? ?? const [])) p as String,
     ],
+    rmGeneral: switch (RmTarget.fromJson(j['rmGeneral'])) {
+      final r? when !r.isNone => r,
+      _ => null,
+    },
     rmTargets: {
       for (final e in ((j['rmTargets'] as Map?) ?? const {}).entries)
         e.key as String: ?RmTarget.fromJson(e.value),

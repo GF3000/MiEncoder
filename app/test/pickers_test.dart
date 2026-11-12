@@ -171,6 +171,12 @@ void main() {
       await tester.tap(find.byKey(const Key('loss-15')));
       await tester.tap(find.byKey(const Key('rm-target-save')));
       await tester.pumpAndSettle();
+      // Deja terminar la escritura real en la base de datos (fuera del
+      // reloj simulado); si no, con la máquina cargada el test es inestable.
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 100)),
+      );
+      await tester.pumpAndSettle();
       expect(c.exerciseId, before); // no ha cambiado de ejercicio
       final s = c.activeSession!;
       expect(s.rmTargets['bench'], const RmTarget(65, 75));
@@ -203,6 +209,11 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('session-picker')));
       await tester.pumpAndSettle();
+      // Plegado: dice cuántos tienen objetivo propio y se despliega.
+      expect(find.text('1 ejercicio con objetivo propio'), findsOneWidget);
+      expect(find.byKey(const Key('rm-target-bench')), findsNothing);
+      await tester.tap(find.text('Objetivo por ejercicio'));
+      await tester.pumpAndSettle();
       expect(
         find.descendant(
           of: find.byKey(const Key('rm-target-bench')),
@@ -222,6 +233,28 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Objetivo · $ex'), findsOneWidget);
       expect(find.byKey(const Key('rm-target-save')), findsOneWidget);
+    });
+
+    testWidgets('objetivo general de la sesión desde su panel', (tester) async {
+      await pumpApp(tester, const Size(1280, 800));
+      await tester.tap(find.byKey(const Key('session-picker')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Sin %1RM'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('session-general')));
+      await tester.pumpAndSettle();
+      expect(find.text('Objetivo de la sesión'), findsWidgets);
+      // En el general no hay «heredar» ni «Guardar en todos».
+      expect(find.byKey(const Key('rm-inherit')), findsNothing);
+      expect(find.byKey(const Key('loss-default')), findsNothing);
+      expect(find.byKey(const Key('rm-target-save-all')), findsNothing);
+      await tester.tap(find.byKey(const Key('rm-preset-2'))); // 75–85
+      await tester.tap(find.byKey(const Key('loss-25')));
+      await tester.tap(find.byKey(const Key('rm-target-save')));
+      await tester.pumpAndSettle();
+      expect(c.activeSession!.rmGeneral, const RmTarget(75, 85));
+      expect(c.activeSession!.lossGeneral, 25);
+      expect(find.textContaining('75–85 %'), findsWidgets); // fila y cabecera
+      expect(tester.takeException(), isNull);
     });
 
     group('con objetivo', () {

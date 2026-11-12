@@ -19,6 +19,39 @@ EncoderFrame f(double mpv) => parseFrameText(
 void main() {
   const t = RmTarget(75, 80);
 
+  group('%1RM general de la sesión', () {
+    test('herencia, propio y «sin objetivo» explícito', () {
+      final s = TrainingSession(id: 's', name: 'S', start: DateTime(2026))
+          .withRmGeneral(t)
+          .withRmTarget('bench', const RmTarget(60, 70))
+          .withRmTarget('row', kNoRmTarget);
+      expect(s.rmFor('squat'), t); // hereda
+      expect(s.rmFor('bench'), const RmTarget(60, 70));
+      expect(s.rmFor('row'), isNull); // sin objetivo aunque haya general
+      final back = TrainingSession.fromJson(s.toJson());
+      expect(back.rmGeneral, t);
+      expect(back.rmTargets, {
+        'bench': const RmTarget(60, 70),
+        'row': kNoRmTarget,
+      });
+      expect(back.withRmGeneral(null).rmFor('squat'), isNull);
+    });
+
+    test('sesión antigua: sin general y sus objetivos siguen igual', () {
+      final old = TrainingSession.fromJson({
+        'id': 'x',
+        'name': 'X',
+        'start': 0,
+        'rmTargets': {
+          'squat': [75, 80],
+        },
+      });
+      expect(old.rmGeneral, isNull);
+      expect(old.rmFor('squat'), t);
+      expect(old.rmFor('bench'), isNull);
+    });
+  });
+
   group('Pérdida de la sesión (JSON)', () {
     test('«Sin límite» se distingue de heredar y sobrevive al JSON', () {
       final s = TrainingSession(
@@ -264,24 +297,34 @@ void main() {
       },
     );
 
-    test('«Guardar en todos»: %1RM en todos y pérdida como general', () async {
-      await c.setSessionTarget(['bench'], loss: 10.0); // sobrescritura previa
-      await c.applyTargetToAll(rm: t, loss: 15);
-      final s = c.activeSession!;
-      for (final e in c.exercises) {
-        expect(s.rmTargets[e.id], t);
-        expect(s.lossFor(e.id), 15);
-      }
-      expect(s.lossGeneral, 15);
-      expect(s.lossTargets, isEmpty);
+    test(
+      '«Guardar en todos»: %1RM y pérdida pasan a ser los generales',
+      () async {
+        // Objetivos propios previos.
+        await c.setSessionTarget(
+          ['bench'],
+          rm: const RmTarget(50, 60),
+          loss: 10.0,
+        );
+        await c.applyTargetToAll(rm: t, loss: 15);
+        final s = c.activeSession!;
+        for (final e in c.exercises) {
+          expect(s.rmFor(e.id), t);
+          expect(s.lossFor(e.id), 15);
+        }
+        expect(s.rmGeneral, t);
+        expect(s.lossGeneral, 15);
+        expect(s.rmTargets, isEmpty);
+        expect(s.lossTargets, isEmpty);
 
-      // Con «Sesión» (null) la general no cambia, pero se quitan las
-      // sobrescrituras.
-      await c.setSessionTarget(['bench'], loss: 30.0);
-      await c.applyTargetToAll(rm: t);
-      expect(c.activeSession!.lossGeneral, 15);
-      expect(c.activeSession!.lossTargets, isEmpty);
-    });
+        // Con «Sesión» (null) la general no cambia, pero se quitan las
+        // sobrescrituras.
+        await c.setSessionTarget(['bench'], loss: 30.0);
+        await c.applyTargetToAll(rm: t);
+        expect(c.activeSession!.lossGeneral, 15);
+        expect(c.activeSession!.lossTargets, isEmpty);
+      },
+    );
 
     test('herencia: el ejercicio usa la general salvo que la cambie', () async {
       c.setExercise('squat');
@@ -392,6 +435,26 @@ void main() {
       expect(c.loadAdviceFor(setId), isNull);
       expect(c.velocityZoneFor(setId), isNull);
     });
+
+    test(
+      'el %1RM general llega al consejo; la sesión nueva no lo copia',
+      () async {
+        c.setActive(null);
+        c.setExercise('squat');
+        await c.setSessionGeneral(rm: t, loss: 25);
+        await doSet(100, 0.90);
+        expect(c.rmTargetForSet(lastSetId), t);
+        expect(c.loadAdviceFor(lastSetId), isNotNull);
+        // Un ejercicio con «sin objetivo» no recibe consejo.
+        await c.setSessionTarget(['squat'], rm: kNoRmTarget);
+        expect(c.rmTargetForSet(lastSetId), isNull);
+        expect(c.loadAdviceFor(lastSetId), isNull);
+
+        final next = await c.newSession();
+        expect(next.rmGeneral, isNull);
+        expect(next.lossGeneral, 25);
+      },
+    );
   });
 
   group('Ajustes de análisis en vivo', () {
