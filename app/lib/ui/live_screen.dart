@@ -188,6 +188,23 @@ class _ExercisePicker extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleLarge,
                 ),
               ),
+              if (c.activeSession case final s?
+                  when s.rmTargets.containsKey(c.exerciseId) ||
+                      s.lossTargets.containsKey(c.exerciseId))
+                Flexible(
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: Text(
+                      sessionTargetText(
+                        s.rmTargets[c.exerciseId],
+                        s.lossTargets[c.exerciseId],
+                      ),
+                      key: const Key('exercise-target'),
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 15, color: kNeutral),
+                    ),
+                  ),
+                ),
               const Icon(Icons.arrow_drop_down),
             ],
           ),
@@ -298,6 +315,15 @@ class _BigReadout extends StatelessWidget {
         final r = live.rep;
         final color = fatigueColor(live.level);
         final player = c.playerById(c.setById(r.setId)?.playerId);
+        final dayRm = c.dayRmFor(r.setId);
+        final target = c.rmTargetForSet(r.setId);
+        final advice = target == null ? null : c.loadAdviceFor(r.setId);
+        final zone = target == null ? null : c.velocityZoneFor(r.setId);
+        final showTarget = target != null && (advice != null || zone != null);
+        final romRef = c.romRefForSet(r.setId);
+        final romStatus = romRef == null || r.romCm <= 0
+            ? null
+            : romRef.statusOf(r.romCm);
         return AnimatedContainer(
           duration: const Duration(milliseconds: 250),
           width: double.infinity,
@@ -312,10 +338,13 @@ class _BigReadout extends StatelessWidget {
             builder: (context, box) {
               var big = (box.maxWidth * 0.30).clamp(56.0, 150.0);
               if (box.maxHeight.isFinite) {
-                // ~95 px para cabecera y fila de datos; el resto, para el número.
+                // ~95 px para cabecera y fila de datos (+30 por cada línea
+                // extra: 1RM de hoy, objetivo); el resto, para el número.
+                final reserved =
+                    95 + (dayRm == null ? 0 : 30) + (showTarget ? 30 : 0);
                 big = big.clamp(
                   32.0,
-                  math.max(32.0, (box.maxHeight - 95) * 0.95),
+                  math.max(32.0, (box.maxHeight - reserved) * 0.95),
                 );
               }
               final content = Column(
@@ -389,13 +418,41 @@ class _BigReadout extends StatelessWidget {
                             ? '–'
                             : '${r.vmax!.toStringAsFixed(r.vmaxTruncated ? 1 : 2)}${r.vmaxTruncated ? '*' : ''}',
                       ),
-                      _Stat('ROM', '${r.romCm.toStringAsFixed(0)} cm'),
+                      _Stat(
+                        romStatus == RomStatus.short
+                            ? 'ROM corto'
+                            : romStatus == RomStatus.long
+                            ? 'ROM largo'
+                            : 'ROM',
+                        romStatus == null
+                            ? '${r.romCm.toStringAsFixed(0)} cm'
+                            : '${r.romCm.toStringAsFixed(0)} cm '
+                                  '(${cmDelta(r.romCm - romRef!.target)})',
+                        color: romStatus == null || romStatus == RomStatus.ok
+                            ? null
+                            : kWarning,
+                      ),
                       _Stat(
                         'Potencia',
                         r.loadKg > 0 ? '${r.meanPowerW.round()} W' : '–',
                       ),
                     ],
                   ),
+                  if (dayRm != null) _DayRmLine(dayRm),
+                  if (showTarget)
+                    _TargetLine(
+                      target: target,
+                      advice: advice,
+                      zone: zone,
+                      // Solo se aplica a la carga del deportista activo.
+                      onApply:
+                          advice != null &&
+                              advice.kind != LoadAdviceKind.keep &&
+                              player != null &&
+                              player.id == c.activePlayerId
+                          ? () => c.setLoad(advice.targetLoad)
+                          : null,
+                    ),
                 ],
               );
               if (!box.maxHeight.isFinite) return content;
@@ -411,9 +468,129 @@ class _BigReadout extends StatelessWidget {
   }
 }
 
+/// "1RM hoy ≈ 111 kg" con la diferencia respecto al perfil en color.
+class _DayRmLine extends StatelessWidget {
+  final DayRmEstimate e;
+  const _DayRmLine(this.e);
+
+  @override
+  Widget build(BuildContext context) {
+    final color = dayRmColor(e.level);
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.only(top: 6),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Colors.white24, width: 0.5)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '1RM hoy ≈ ${e.e1Rm.round()} kg  ·  perfil ${e.referenceRm.round()} kg'
+              '${e.romOutOfRange ? '  ·  ROM fuera de rango' : ''}',
+              style: const TextStyle(fontSize: 15, color: Colors.white70),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              dayRmText(e),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "77 % hoy · objetivo 75–80 %" (o la zona de velocidad, si aún no hay
+/// consejo) y el consejo de carga
+/// ("↑ Sube a 110 kg (+10)"); al tocarlo se aplica la carga recomendada.
+class _TargetLine extends StatelessWidget {
+  final RmTarget target;
+  final LoadAdvice? advice;
+  final (double, double)? zone;
+  final VoidCallback? onApply;
+
+  const _TargetLine({
+    required this.target,
+    this.advice,
+    this.zone,
+    this.onApply,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final a = advice;
+    final z = zone;
+    final info = [
+      if (a != null)
+        '${a.percent.round()} % hoy${a.generic ? ' (genérico)' : ''}',
+      'objetivo ${rmTargetText(target)}',
+      // Con consejo de carga la zona sobra; sin él (1.ª rep), orienta.
+      if (z != null && a == null) 'zona ${v2(z.$1)}–${v2(z.$2)}',
+    ].join('  ·  ');
+    final color = a == null ? kNeutral : loadAdviceColor(a.kind);
+    return Container(
+      key: const Key('target-line'),
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.only(top: 6),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Colors.white24, width: 0.5)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              info,
+              style: const TextStyle(fontSize: 15, color: Colors.white70),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (a != null)
+            Material(
+              color: color.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(8),
+              child: InkWell(
+                key: const Key('load-advice'),
+                borderRadius: BorderRadius.circular(8),
+                onTap: onApply,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 2,
+                  ),
+                  child: Text(
+                    loadAdviceText(a),
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: color,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 class _Stat extends StatelessWidget {
   final String label, value;
-  const _Stat(this.label, this.value);
+  final Color? color;
+  const _Stat(this.label, this.value, {this.color});
 
   @override
   Widget build(BuildContext context) => Expanded(
@@ -424,11 +601,15 @@ class _Stat extends StatelessWidget {
         children: [
           Text(
             value,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
           ),
           Text(
             label,
-            style: const TextStyle(fontSize: 12, color: Colors.white60),
+            style: TextStyle(fontSize: 12, color: color ?? Colors.white60),
           ),
         ],
       ),
@@ -451,7 +632,7 @@ class _SetBars extends StatelessWidget {
         : c.repsOfSet(c.lastLive!.rep.setId);
     if (all.isEmpty) return const SizedBox.expand();
     final m = c.settings.metric;
-    final threshold = c.settings.velocityLossThreshold;
+    final threshold = c.lossThresholdForSet(c.lastLive!.rep.setId);
     final vsAll = all.map((r) => r.velocity(m)).toList();
     final best = vsAll.reduce(math.max);
     final start = math.max(0, all.length - _maxBars);
@@ -510,6 +691,7 @@ class _SetBars extends StatelessWidget {
                                         runningBest[start + i],
                                         vs[i],
                                       ),
+                                      setId: all.first.setId,
                                     ),
                                   ),
                                   borderRadius: const BorderRadius.vertical(

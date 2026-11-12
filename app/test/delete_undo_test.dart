@@ -9,6 +9,7 @@ import 'package:miencoder/main.dart';
 import 'package:miencoder/services/encoder.dart';
 import 'package:miencoder/services/repository.dart';
 import 'package:miencoder/ui/common.dart';
+import 'package:miencoder/ui/set_tile.dart';
 
 import 'controller_test.dart' show SilentFeedback;
 
@@ -206,6 +207,41 @@ void main() {
         find.text('Deshacer'),
         findsOneWidget,
       ); // visible dentro de la hoja
+      await tester.pump(const Duration(seconds: 5)); // deja expirar el aviso
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('mantener pulsada una serie → Eliminar serie', (tester) async {
+      await pumpApp(tester, const Size(393, 873));
+      c.onFrame(f(1.0));
+      c.forceNewSet();
+      c.onFrame(f(0.9));
+      c.onFrame(f(0.85));
+      await tester.pump(const Duration(seconds: 1));
+
+      await tester.tap(find.byTooltip('Series recientes'));
+      await tester.pumpAndSettle();
+      await tester.longPress(
+        find
+            .descendant(
+              of: find.byType(SetTile),
+              matching: find.byType(ListTile),
+            )
+            .first,
+      );
+      await tester.pumpAndSettle();
+      final item = find.textContaining('Eliminar serie (');
+      expect(item, findsOneWidget);
+      await tester.tap(item);
+      for (var i = 0; i < 40 && c.recentSets().length != 1; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 50)),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(c.recentSets().length, 1);
+      expect(c.reps.length, lessThan(3));
       await tester.pump(const Duration(seconds: 5)); // deja expirar el aviso
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);

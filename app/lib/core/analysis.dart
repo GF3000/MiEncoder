@@ -313,6 +313,280 @@ LvAnalysis analyzeLoadVelocity(
   return LvAnalysis(points, fitLoadVelocity(analysis.used));
 }
 
+// ------------------------------------------------------------ ROM
+
+/// Repeticiones de días anteriores necesarias para calcular el ROM de
+/// referencia automático.
+const int kRomMinReps = 10;
+
+/// Rango normal del ROM: al menos ±3 cm (lo que el encoder distingue de
+/// verdad) y como mucho ±8 % del ROM de referencia.
+const double kRomMinBandCm = 3;
+const double kRomMaxBandFraction = 0.08;
+
+enum RomStatus { ok, short, long }
+
+/// ROM de referencia de un deportista en un ejercicio y su rango normal.
+class RomReference {
+  /// cm.
+  final double target;
+
+  /// ± cm.
+  final double band;
+
+  /// true si el entrenador fijó el ROM objetivo a mano.
+  final bool manual;
+
+  const RomReference(this.target, this.band, {this.manual = false});
+
+  RomStatus statusOf(double romCm) {
+    if (romCm < target - band) return RomStatus.short;
+    if (romCm > target + band) return RomStatus.long;
+    return RomStatus.ok;
+  }
+
+  /// ROM ≤ 0 = sin medir (p. ej. un punto manual): se acepta siempre.
+  bool accepts(double romCm) => romCm <= 0 || statusOf(romCm) == RomStatus.ok;
+}
+
+/// ROM de referencia a partir de [history] (repeticiones de días
+/// anteriores): mediana y rango con la dispersión robusta (MAD). Con
+/// [manualTarget] el centro es ese valor y el historial solo da el rango.
+/// null si no hay objetivo manual ni [kRomMinReps] repeticiones.
+RomReference? romReference(List<Rep> history, {double? manualTarget}) {
+  final roms = [
+    for (final r in history)
+      if (r.romCm > 0) r.romCm,
+  ];
+  if (manualTarget == null && roms.length < kRomMinReps) return null;
+  final target = manualTarget ?? _median(roms);
+  double band;
+  if (roms.length >= kRomMinReps) {
+    final med = _median(roms);
+    final sd = 1.4826 * _median([for (final r in roms) (r - med).abs()]);
+    band = 2 * sd;
+  } else {
+    band = kRomMinBandCm;
+  }
+  final maxBand = math.max(kRomMinBandCm, target * kRomMaxBandFraction);
+  band = band.clamp(kRomMinBandCm, maxBand).toDouble();
+  return RomReference(target, band, manual: manualTarget != null);
+}
+
+/// Repeticiones de [reps] con el ROM dentro del rango de [rom] (todas si
+/// no hay referencia).
+List<Rep> withValidRom(List<Rep> reps, RomReference? rom) => rom == null
+    ? reps
+    : [
+        for (final r in reps)
+          if (rom.accepts(r.romCm)) r,
+      ];
+
+/// Cómo fue el ROM de una serie respecto a la referencia.
+class SetRomSummary {
+  /// ROM medio de la serie menos el de referencia (cm).
+  final double meanDelta;
+
+  /// Repeticiones fuera de rango (cortas o largas).
+  final int outOfRange;
+
+  /// ROM de las 2 últimas menos el de las 2 primeras (cm); null con menos
+  /// de 4 repeticiones.
+  final double? drift;
+
+  final RomReference ref;
+
+  const SetRomSummary(this.meanDelta, this.outOfRange, this.drift, this.ref);
+
+  RomStatus get status => ref.statusOf(ref.target + meanDelta);
+
+  /// El ROM cae al final de la serie más que el rango normal.
+  bool get dropsAtEnd => drift != null && drift! < -ref.band;
+}
+
+SetRomSummary? summarizeSetRom(List<Rep> reps, RomReference? ref) {
+  if (ref == null || reps.isEmpty) return null;
+  final roms = [for (final r in reps) r.romCm];
+  final mean = roms.reduce((a, b) => a + b) / roms.length;
+  final out = roms.where((r) => !ref.accepts(r)).length;
+  double? drift;
+  if (roms.length >= 4) {
+    final first = (roms[0] + roms[1]) / 2;
+    final last = (roms[roms.length - 1] + roms[roms.length - 2]) / 2;
+    drift = last - first;
+  }
+  return SetRomSummary(mean - ref.target, out, drift, ref);
+}
+
+// ------------------------------------------------------------ 1RM del día
+
+/// Velocidad que representa una serie: media de sus 2 repeticiones más
+/// rápidas, quitando antes un pico aislado que parezca fallo de lectura
+/// (ver [kGlitchRatio]). null si no quedan al menos 2 repeticiones.
+double? setVelocity(List<Rep> reps, VelocityMetric metric) {
+  final v = [for (final r in reps) r.velocity(metric)]
+    ..sort((a, b) => b.compareTo(a));
+  if (v.length >= 2 &&
+      v[0] > v[1] * kGlitchRatio &&
+      v[0] - v[1] > kGlitchMinDiff) {
+    v.removeAt(0);
+  }
+  if (v.length < 2) return null;
+  return (v[0] + v[1]) / 2;
+}
+
+/// Por debajo de este % del 1RM la estimación es poco fiable: no se muestra.
+const double kDayRmMinPercentLoad = 40;
+
+/// Mínimo de cargas en el perfil de referencia para estimar el 1RM del día.
+const int kDayRmMinLoads = 3;
+
+/// Rango normal (±%) cuando aún no hay series suficientes para calcular el
+/// de la persona, y límites para el calculado.
+const double kDayRmDefaultBand = 4;
+const double kDayRmMinBand = 3;
+const double kDayRmMaxBand = 8;
+const int kDayRmMinSetsForBand = 6;
+
+/// Cómo está el 1RM del día respecto al de referencia.
+enum DayRmLevel { above, normal, low, veryLow }
+
+/// Referencia con la que se comparan las series de un día: el perfil
+/// carga-velocidad con los datos ANTERIORES a ese día y el rango normal de
+/// la persona (±%).
+class DayRmReference {
+  final LvProfile profile;
+  final double mvt;
+  final double band;
+
+  const DayRmReference(this.profile, this.mvt, this.band);
+
+  double get oneRm => profile.estimated1Rm(mvt);
+
+  /// 1RM que indica una serie con carga [load] y velocidad [v]: la recta del
+  /// perfil desplazada en paralelo hasta pasar por ese punto.
+  double e1RmFor(double load, double v) => load + (mvt - v) / profile.slope;
+
+  /// Inversa de [e1RmFor]: velocidad de una serie con [load] que indicaría
+  /// un 1RM del día de [e1Rm].
+  double velocityFor(double load, double e1Rm) =>
+      mvt - profile.slope * (e1Rm - load);
+
+  /// Velocidades de serie (lenta, rápida) con las que [load] queda dentro de
+  /// [target] respecto al 1RM del día. null si la carga es demasiado ligera
+  /// respecto al perfil para juzgarla.
+  (double, double)? velocityZone(double load, RmTarget target) {
+    if (load <= 0 || target.min <= 0 || target.max < target.min) return null;
+    if (load / oneRm * 100 < kDayRmMinPercentLoad) return null;
+    return (
+      velocityFor(load, load * 100 / target.max),
+      velocityFor(load, load * 100 / target.min),
+    );
+  }
+}
+
+/// 1RM que indica una serie, comparado con el de referencia.
+class DayRmEstimate {
+  final double e1Rm;
+  final double referenceRm;
+  final double band;
+
+  /// true si casi todas las repeticiones tenían el ROM fuera de rango y se
+  /// estimó con todas igualmente (menos fiable: se avisa en pantalla).
+  final bool romOutOfRange;
+
+  const DayRmEstimate(
+    this.e1Rm,
+    this.referenceRm,
+    this.band, {
+    this.romOutOfRange = false,
+  });
+
+  /// Diferencia en % respecto al 1RM de referencia (negativo = por debajo).
+  double get percent => (e1Rm / referenceRm - 1) * 100;
+
+  DayRmLevel get level {
+    final p = percent;
+    if (p <= -2 * band) return DayRmLevel.veryLow;
+    if (p < -band) return DayRmLevel.low;
+    if (p >= band) return DayRmLevel.above;
+    return DayRmLevel.normal;
+  }
+}
+
+/// Referencia para estimar el 1RM del día a partir de [history] (las
+/// repeticiones de ese deportista y ejercicio ANTES del día). null si el
+/// perfil no tiene al menos [kDayRmMinLoads] cargas.
+///
+/// El rango normal sale de cuánto se desvían de la referencia las series del
+/// propio historial (raíz del error cuadrático medio, en %).
+DayRmReference? dayRmReference(
+  List<Rep> history,
+  VelocityMetric metric,
+  double mvt, {
+  Map<String, ProfileMark> marks = const {},
+  RomReference? rom,
+}) {
+  history = withValidRom(history, rom);
+  final analysis = analyzeLoadVelocity(history, metric, marks: marks);
+  final profile = analysis.profile;
+  if (profile == null || analysis.used.length < kDayRmMinLoads) return null;
+  final draft = DayRmReference(profile, mvt, kDayRmDefaultBand);
+  final rm = draft.oneRm;
+  if (!rm.isFinite || rm <= 0) return null;
+
+  final bySet = <String, List<Rep>>{};
+  for (final r in history) {
+    if (r.loadKg <= 0 || marks[r.setId] == ProfileMark.exclude) continue;
+    (bySet[r.setId] ??= []).add(r);
+  }
+  final devs = <double>[];
+  for (final rs in bySet.values) {
+    final v = setVelocity(rs, metric);
+    final load = rs.first.loadKg;
+    if (v == null || load / rm * 100 < kDayRmMinPercentLoad) continue;
+    devs.add((draft.e1RmFor(load, v) / rm - 1) * 100);
+  }
+  var band = kDayRmDefaultBand;
+  if (devs.length >= kDayRmMinSetsForBand) {
+    final rms = math.sqrt(
+      devs.map((d) => d * d).reduce((a, b) => a + b) / devs.length,
+    );
+    band = rms.clamp(kDayRmMinBand, kDayRmMaxBand).toDouble();
+  }
+  return DayRmReference(profile, mvt, band);
+}
+
+/// 1RM del día que indica una serie ([setReps], todas con la misma carga).
+/// Se usan las repeticiones con ROM válido; si quedan menos de 2, todas
+/// (marcado con [DayRmEstimate.romOutOfRange]): mejor un dato con aviso que
+/// ninguno. null si no hay referencia, la serie tiene menos de 2
+/// repeticiones o la carga es demasiado ligera para estimar con fiabilidad.
+DayRmEstimate? estimateDayRm(
+  List<Rep> setReps,
+  DayRmReference? ref,
+  VelocityMetric metric, {
+  RomReference? rom,
+}) {
+  if (ref == null || setReps.isEmpty) return null;
+  final load = setReps.first.loadKg;
+  final rm = ref.oneRm;
+  if (load <= 0 || load / rm * 100 < kDayRmMinPercentLoad) return null;
+  var v = setVelocity(withValidRom(setReps, rom), metric);
+  var romOut = false;
+  if (v == null) {
+    v = setVelocity(setReps, metric);
+    romOut = v != null && rom != null;
+  }
+  if (v == null) return null;
+  return DayRmEstimate(
+    ref.e1RmFor(load, v),
+    rm,
+    ref.band,
+    romOutOfRange: romOut,
+  );
+}
+
 /// Máximo acumulado: [3, 5, 4] → [3, 5, 5]. Sirve para colorear cada
 /// repetición respecto a la mejor HASTA ese momento.
 List<double> runningMax(List<double> values) {
@@ -323,4 +597,123 @@ List<double> runningMax(List<double> values) {
     out.add(m);
   }
   return out;
+}
+
+// ------------------------------------------------------------ consejo de carga
+
+/// Cambio máximo (%) que se recomienda de una serie a la siguiente: si el
+/// objetivo queda lejos, se llega en varios pasos y se re-evalúa cada serie.
+const double kAdviceMaxChangePercent = 10;
+
+enum LoadAdviceKind { up, keep, down }
+
+/// Qué hacer con la carga tras una serie para quedar en el %1RM objetivo.
+class LoadAdvice {
+  final LoadAdviceKind kind;
+
+  /// Carga de la serie que se juzga.
+  final double load;
+
+  /// Carga recomendada para la siguiente (igual a [load] si [kind] es keep).
+  final double targetLoad;
+
+  /// % del 1RM del día que ha supuesto la serie.
+  final double percent;
+  final RmTarget target;
+
+  /// true si se calculó con la relación genérica velocidad-%1RM (sin
+  /// perfil propio del deportista): menos precisa.
+  final bool generic;
+
+  const LoadAdvice(
+    this.kind,
+    this.load,
+    this.targetLoad,
+    this.percent,
+    this.target, {
+    this.generic = false,
+  });
+
+  double get delta => targetLoad - load;
+}
+
+/// Consejo de carga: si [load] es el [LoadAdvice.percent] % de [dayRm] y
+/// está dentro de [target], mantener; si no, ir hacia el centro del rango,
+/// redondeando a [step] y sin cambiar más de [kAdviceMaxChangePercent] %
+/// (siempre al menos un [step]).
+LoadAdvice? loadAdvice({
+  required double load,
+  required double dayRm,
+  required RmTarget target,
+  required double step,
+  bool generic = false,
+}) {
+  if (load <= 0 || !dayRm.isFinite || dayRm <= 0) return null;
+  final pct = load / dayRm * 100;
+  if (target.contains(pct)) {
+    return LoadAdvice(
+      LoadAdviceKind.keep,
+      load,
+      load,
+      pct,
+      target,
+      generic: generic,
+    );
+  }
+  final s = step > 0 ? step : 2.5;
+  final cap = load * kAdviceMaxChangePercent / 100;
+  final ideal = (target.mid / 100 * dayRm).clamp(load - cap, load + cap);
+  var next = (ideal / s).round() * s;
+  final up = pct < target.min;
+  if (up ? next <= load : next >= load) next = up ? load + s : load - s;
+  if (next <= 0) return null;
+  return LoadAdvice(
+    up ? LoadAdviceKind.up : LoadAdviceKind.down,
+    load,
+    next,
+    pct,
+    target,
+    generic: generic,
+  );
+}
+
+// ------------------------------------------------------------ relación genérica
+
+/// Diferencia de velocidad media propulsiva entre el 100 % y el 40 % del
+/// 1RM, típica en la literatura de VBT para sentadilla y press banca
+/// (≈ 0,95 m/s). Con la velocidad a 1RM de cada ejercicio da una recta
+/// velocidad-%1RM genérica para quien no tiene perfil propio.
+const double kGenericVelocitySpan = 0.95;
+
+/// %1RM que indica la velocidad [v] según la relación genérica.
+double genericPercentRm(double v, double mvt) =>
+    100 - 60 * (v - mvt) / kGenericVelocitySpan;
+
+/// Velocidad que corresponde a [percent] %1RM según la relación genérica.
+double genericVelocityAt(double percent, double mvt) =>
+    mvt + kGenericVelocitySpan * (100 - percent) / 60;
+
+/// Consejo de carga sin perfil propio: el %1RM sale de la velocidad de la
+/// serie con la relación genérica. null si la serie no tiene 2
+/// repeticiones o la velocidad cae fuera de 40–105 %.
+LoadAdvice? genericLoadAdvice(
+  List<Rep> setReps,
+  VelocityMetric metric, {
+  required double mvt,
+  required RmTarget target,
+  required double step,
+}) {
+  if (setReps.isEmpty) return null;
+  final v = setVelocity(setReps, metric);
+  if (v == null) return null;
+  final pct = genericPercentRm(v, mvt);
+  if (pct < kDayRmMinPercentLoad || pct > 105) return null;
+  final load = setReps.first.loadKg;
+  return loadAdvice(
+    load: load,
+    dayRm: load * 100 / pct,
+    target: target,
+    step: step,
+    generic: true,
+  );
 }

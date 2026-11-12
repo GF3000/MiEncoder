@@ -11,24 +11,51 @@ class Player {
   final String name;
   final bool archived;
 
-  const Player({required this.id, required this.name, this.archived = false});
+  /// ROM objetivo (cm) fijado a mano por ejercicio. Sin entrada = automático.
+  final Map<String, double> romTargets;
 
-  Player copyWith({String? name, bool? archived}) => Player(
+  const Player({
+    required this.id,
+    required this.name,
+    this.archived = false,
+    this.romTargets = const {},
+  });
+
+  Player copyWith({
+    String? name,
+    bool? archived,
+    Map<String, double>? romTargets,
+  }) => Player(
     id: id,
     name: name ?? this.name,
     archived: archived ?? this.archived,
+    romTargets: romTargets ?? this.romTargets,
+  );
+
+  /// Copia con el ROM objetivo de [exerciseId] fijado ([cm]) o quitado (null).
+  Player withRomTarget(String exerciseId, double? cm) => copyWith(
+    romTargets: {
+      for (final e in romTargets.entries)
+        if (e.key != exerciseId) e.key: e.value,
+      exerciseId: ?cm,
+    },
   );
 
   Map<String, Object?> toJson() => {
     'id': id,
     'name': name,
     'archived': archived,
+    if (romTargets.isNotEmpty) 'romTargets': romTargets,
   };
 
   factory Player.fromJson(Map<String, Object?> j) => Player(
     id: j['id'] as String,
     name: j['name'] as String,
     archived: (j['archived'] as bool?) ?? false,
+    romTargets: {
+      for (final e in ((j['romTargets'] as Map?) ?? const {}).entries)
+        e.key as String: (e.value as num).toDouble(),
+    },
   );
 }
 
@@ -198,6 +225,35 @@ class WorkSet {
   );
 }
 
+/// Rango objetivo de intensidad, en % del 1RM (p. ej. 75–80 %).
+class RmTarget {
+  final double min;
+  final double max;
+
+  const RmTarget(this.min, this.max);
+
+  double get mid => (min + max) / 2;
+
+  bool contains(double percent) => percent >= min && percent <= max;
+
+  List<double> toJson() => [min, max];
+
+  /// null si el JSON no es un rango válido.
+  static RmTarget? fromJson(Object? j) {
+    if (j is! List || j.length != 2) return null;
+    final [a, b] = j;
+    if (a is! num || b is! num) return null;
+    return RmTarget(a.toDouble(), b.toDouble());
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is RmTarget && other.min == min && other.max == max;
+
+  @override
+  int get hashCode => Object.hash(min, max);
+}
+
 /// Una sesión: "la convocatoria del día". Decide qué deportistas aparecen en
 /// la cuadrícula y agrupa las series que se registran mientras está activa.
 class TrainingSession {
@@ -208,26 +264,62 @@ class TrainingSession {
   /// Deportistas convocados, en el orden en que se añadieron.
   final List<String> playerIds;
 
+  /// Intensidad objetivo por ejercicio (id → rango de %1RM).
+  final Map<String, RmTarget> rmTargets;
+
+  /// Pérdida de velocidad máxima (%) por ejercicio. Sin valor se usa la de
+  /// los ajustes.
+  final Map<String, double> lossTargets;
+
   const TrainingSession({
     required this.id,
     required this.name,
     required this.start,
     this.playerIds = const [],
+    this.rmTargets = const {},
+    this.lossTargets = const {},
   });
 
-  TrainingSession copyWith({String? name, List<String>? playerIds}) =>
-      TrainingSession(
-        id: id,
-        name: name ?? this.name,
-        start: start,
-        playerIds: playerIds ?? this.playerIds,
-      );
+  TrainingSession copyWith({
+    String? name,
+    List<String>? playerIds,
+    Map<String, RmTarget>? rmTargets,
+    Map<String, double>? lossTargets,
+  }) => TrainingSession(
+    id: id,
+    name: name ?? this.name,
+    start: start,
+    playerIds: playerIds ?? this.playerIds,
+    rmTargets: rmTargets ?? this.rmTargets,
+    lossTargets: lossTargets ?? this.lossTargets,
+  );
+
+  /// Fija (o quita, con null) el objetivo de un ejercicio.
+  TrainingSession withRmTarget(String exerciseId, RmTarget? t) => copyWith(
+    rmTargets: {
+      for (final e in rmTargets.entries)
+        if (e.key != exerciseId) e.key: e.value,
+      exerciseId: ?t,
+    },
+  );
+
+  /// Fija (o quita, con null) la pérdida de velocidad máxima de un ejercicio.
+  TrainingSession withLossTarget(String exerciseId, double? loss) => copyWith(
+    lossTargets: {
+      for (final e in lossTargets.entries)
+        if (e.key != exerciseId) e.key: e.value,
+      exerciseId: ?loss,
+    },
+  );
 
   Map<String, Object?> toJson() => {
     'id': id,
     'name': name,
     'start': start.millisecondsSinceEpoch,
     'players': playerIds,
+    if (rmTargets.isNotEmpty)
+      'rmTargets': {for (final e in rmTargets.entries) e.key: e.value.toJson()},
+    if (lossTargets.isNotEmpty) 'lossTargets': lossTargets,
   };
 
   factory TrainingSession.fromJson(Map<String, Object?> j) => TrainingSession(
@@ -237,6 +329,14 @@ class TrainingSession {
     playerIds: [
       for (final p in (j['players'] as List? ?? const [])) p as String,
     ],
+    rmTargets: {
+      for (final e in ((j['rmTargets'] as Map?) ?? const {}).entries)
+        e.key as String: ?RmTarget.fromJson(e.value),
+    },
+    lossTargets: {
+      for (final e in ((j['lossTargets'] as Map?) ?? const {}).entries)
+        if (e.value is num) e.key as String: (e.value as num).toDouble(),
+    },
   );
 }
 
@@ -251,6 +351,9 @@ class Settings {
   final bool speakVelocity;
   final double loadStep;
 
+  /// Avisar (voz o pitido) cuando una repetición tiene el ROM corto.
+  final bool romAlerts;
+
   const Settings({
     this.velocityLossThreshold = 20,
     this.fatigueEnabled = true,
@@ -258,6 +361,7 @@ class Settings {
     this.beepEachRep = true,
     this.speakVelocity = false,
     this.loadStep = 2.5,
+    this.romAlerts = true,
   });
 
   Settings copyWith({
@@ -267,6 +371,7 @@ class Settings {
     bool? beepEachRep,
     bool? speakVelocity,
     double? loadStep,
+    bool? romAlerts,
   }) => Settings(
     velocityLossThreshold: velocityLossThreshold ?? this.velocityLossThreshold,
     fatigueEnabled: fatigueEnabled ?? this.fatigueEnabled,
@@ -274,6 +379,7 @@ class Settings {
     beepEachRep: beepEachRep ?? this.beepEachRep,
     speakVelocity: speakVelocity ?? this.speakVelocity,
     loadStep: loadStep ?? this.loadStep,
+    romAlerts: romAlerts ?? this.romAlerts,
   );
 
   Map<String, Object?> toJson() => {
@@ -283,6 +389,7 @@ class Settings {
     'beep': beepEachRep,
     'speak': speakVelocity,
     'loadStep': loadStep,
+    'romAlerts': romAlerts,
   };
 
   factory Settings.fromJson(Map<String, Object?> j) => Settings(
@@ -295,5 +402,6 @@ class Settings {
     beepEachRep: (j['beep'] as bool?) ?? true,
     speakVelocity: (j['speak'] as bool?) ?? false,
     loadStep: (j['loadStep'] as num?)?.toDouble() ?? 2.5,
+    romAlerts: (j['romAlerts'] as bool?) ?? true,
   );
 }

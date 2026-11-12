@@ -9,6 +9,7 @@ import '../services/auth.dart';
 import '../services/sync.dart';
 import 'account_screen.dart';
 import 'common.dart';
+import 'value_sheets.dart';
 
 class SettingsScreen extends StatelessWidget {
   final AppController c;
@@ -98,6 +99,15 @@ class SettingsScreen extends StatelessWidget {
                 onChanged: (v) =>
                     c.updateSettings(s.copyWith(speakVelocity: v)),
               ),
+              SwitchListTile(
+                title: const Text('Avisar si el ROM es corto'),
+                subtitle: const Text(
+                  'Dice "corta" (o pita) cuando una repetición baja menos de lo '
+                  'habitual del deportista',
+                ),
+                value: s.romAlerts,
+                onChanged: (v) => c.updateSettings(s.copyWith(romAlerts: v)),
+              ),
               const _Header('Series'),
               const ListTile(
                 dense: true,
@@ -127,19 +137,14 @@ class SettingsScreen extends StatelessWidget {
                   trailing: PopupMenuButton<String>(
                     onSelected: (v) async {
                       if (v == 'mvt') {
-                        final x = parseNum(
-                          await askText(
-                            context,
-                            title: 'VMT de ${e.name} (m/s)',
-                            initial: v2(e.mvt),
-                            keyboard: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                          ),
+                        final r = await showExerciseSheet(
+                          context,
+                          title: 'VMT de ${e.name}',
+                          name: e.name,
+                          mvt: e.mvt,
+                          askName: false,
                         );
-                        if (x != null && x > 0 && x < 2) {
-                          c.updateExercise(e.copyWith(mvt: x));
-                        }
+                        if (r != null) c.updateExercise(e.copyWith(mvt: r.mvt));
                       } else if (v == 'rename') {
                         final n = await askText(
                           context,
@@ -177,25 +182,11 @@ class SettingsScreen extends StatelessWidget {
                 leading: const Icon(Icons.add),
                 title: const Text('Añadir ejercicio'),
                 onTap: () async {
-                  final name = await askText(
+                  final r = await showExerciseSheet(
                     context,
-                    title: 'Nombre del ejercicio',
+                    title: 'Nuevo ejercicio',
                   );
-                  if (name == null || name.trim().isEmpty || !context.mounted)
-                    return;
-                  final v =
-                      parseNum(
-                        await askText(
-                          context,
-                          title: 'Velocidad a 1RM (m/s)',
-                          initial: '0.30',
-                          keyboard: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                        ),
-                      ) ??
-                      0.30;
-                  c.addExercise(name, v);
+                  if (r != null) c.addExercise(r.name, r.mvt);
                 },
               ),
               const _Header('Datos'),

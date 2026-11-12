@@ -45,6 +45,9 @@ class PendingReassign {
   const PendingReassign(this.repIds, this.fromPlayerId, this.toPlayerId);
 }
 
+/// Días de historial con los que se calcula la referencia del 1RM del día.
+const int kDayRmWindowDays = 90;
+
 /// Solo se ofrece reasignar si la última rep fue hace menos de esto.
 const kPendingWindow = Duration(minutes: 2);
 
@@ -332,11 +335,16 @@ class AppController extends ChangeNotifier {
     _streak.add(rep.id);
 
     lastLive = _liveFor(rep);
+    final rom = romRefForSet(set.id);
     feedback.onRep(
       level: lastLive!.level,
       beepEachRep: settings.beepEachRep,
       speak: settings.speakVelocity,
       velocity: rep.velocity(settings.metric),
+      romShort:
+          settings.romAlerts &&
+          rom != null &&
+          rom.statusOf(rep.romCm) == RomStatus.short,
     );
     notifyListeners();
   }
@@ -351,7 +359,7 @@ class AppController extends ChangeNotifier {
         .map((r) => r.velocity(settings.metric))
         .reduce(math.max);
     final loss = velocityLossPercent(best, rep.velocity(settings.metric));
-    return LiveRep(rep, setReps.length, loss, levelFor(loss));
+    return LiveRep(rep, setReps.length, loss, levelFor(loss, setId: rep.setId));
   }
 
   /// Cierra todas las series abiertas: la próxima repetición empieza serie.
@@ -761,10 +769,21 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Nivel de fatiga según los ajustes ([FatigueLevel.off] si están apagados).
-  FatigueLevel levelFor(double lossPercent) => settings.fatigueEnabled
-      ? fatigueLevel(lossPercent, settings.velocityLossThreshold)
+  /// Nivel de fatiga ([FatigueLevel.off] si está apagada en los ajustes),
+  /// con el umbral del ejercicio de la serie [setId] en su sesión.
+  FatigueLevel levelFor(double lossPercent, {String? setId}) =>
+      settings.fatigueEnabled
+      ? fatigueLevel(lossPercent, lossThresholdForSet(setId))
       : FatigueLevel.off;
+
+  /// Pérdida de velocidad máxima (%) para la serie [setId]: la de su
+  /// ejercicio en su sesión o, si no hay, la de los ajustes.
+  double lossThresholdForSet(String? setId) {
+    final s = setId == null ? null : setById(setId);
+    if (s == null) return settings.velocityLossThreshold;
+    return sessionById(s.sessionId)?.lossTargets[s.exerciseId] ??
+        settings.velocityLossThreshold;
+  }
 
   int setsOfPlayer(String playerId) =>
       sets.where((s) => s.playerId == playerId).length;
@@ -854,13 +873,192 @@ class AppController extends ChangeNotifier {
     required String exerciseId,
     DateTime? since,
   }) => analyzeLoadVelocity(
-    repsFor(playerId: playerId, exerciseId: exerciseId, since: since),
+    withValidRom(
+      repsFor(playerId: playerId, exerciseId: exerciseId, since: since),
+      romRefFor(playerId, exerciseId),
+    ),
     settings.metric,
-    marks: {
-      for (final s in sets)
-        if (s.profileMark != null) s.id: s.profileMark!,
-    },
+    marks: _profileMarks,
   );
+
+  Map<String, ProfileMark> get _profileMarks => {
+    for (final s in sets)
+      if (s.profileMark != null) s.id: s.profileMark!,
+  };
+
+  /// Referencias del 1RM del día, por (deportista, ejercicio, día). Se
+  /// vacían en cada cambio de datos (ver [notifyListeners]).
+  final Map<(String, String, DateTime), DayRmReference?> _dayRmRefs = {};
+
+  /// Referencias de ROM, por (deportista, ejercicio, día o null = todo).
+  final Map<(String, String, DateTime?), RomReference?> _romRefs = {};
+
+  @override
+  void notifyListeners() {
+    _dayRmRefs.clear();
+    _romRefs.clear();
+    super.notifyListeners();
+  }
+
+  /// ROM de referencia de [playerId] en [exerciseId]: el objetivo manual si
+  /// lo hay; si no, la mediana de los [kDayRmWindowDays] días ANTERIORES a
+  /// [day] (con [day] null, de todos los datos: para el perfil).
+  RomReference? romRefFor(String playerId, String exerciseId, [DateTime? day]) {
+    final key = (playerId, exerciseId, day);
+    if (_romRefs.containsKey(key)) return _romRefs[key];
+    var history = repsFor(
+      playerId: playerId,
+      exerciseId: exerciseId,
+      since: day?.subtract(const Duration(days: kDayRmWindowDays)),
+    );
+    if (day != null) {
+      history = history.where((r) => r.time.isBefore(day)).toList();
+    }
+    return _romRefs[key] = romReference(
+      history,
+      manualTarget: playerById(playerId)?.romTargets[exerciseId],
+    );
+  }
+
+  /// ROM de referencia con el que se juzga la serie [setId] (la de su día).
+  RomReference? romRefForSet(String setId) {
+    final s = setById(setId);
+    final playerId = s?.playerId;
+    if (s == null || playerId == null) return null;
+    final t = repsOfSet(setId).firstOrNull?.time ?? s.start;
+    return romRefFor(playerId, s.exerciseId, DateTime(t.year, t.month, t.day));
+  }
+
+  /// Fija (cm) o quita (null = automático) el ROM objetivo de un deportista.
+  Future<void> setRomTarget(
+    String playerId,
+    String exerciseId,
+    double? cm,
+  ) async {
+    final p = playerById(playerId);
+    if (p == null) return;
+    await updatePlayer(p.withRomTarget(exerciseId, cm));
+  }
+
+  /// Referencia del 1RM del día para la serie [setId]: el perfil del
+  /// deportista con los datos de los [kDayRmWindowDays] días ANTERIORES a
+  /// ese día (las series del propio día no cuentan: si no, un día malo
+  /// bajaría la referencia y dejaría de verse).
+  DayRmReference? _dayRmRefForSet(String setId) {
+    final s = setById(setId);
+    final playerId = s?.playerId;
+    if (s == null || playerId == null) return null;
+    final t = repsOfSet(setId).firstOrNull?.time ?? s.start;
+    final day = DateTime(t.year, t.month, t.day);
+    final key = (playerId, s.exerciseId, day);
+    if (_dayRmRefs.containsKey(key)) return _dayRmRefs[key];
+    return _dayRmRefs[key] = dayRmReference(
+      repsFor(
+        playerId: playerId,
+        exerciseId: s.exerciseId,
+        since: day.subtract(const Duration(days: kDayRmWindowDays)),
+      ).where((r) => r.time.isBefore(day)).toList(),
+      settings.metric,
+      exerciseById(s.exerciseId).mvt,
+      marks: _profileMarks,
+      rom: romRefFor(playerId, s.exerciseId, day),
+    );
+  }
+
+  /// 1RM del día que indica la serie [setId], comparado con el perfil del
+  /// deportista (ver [_dayRmRefForSet]). null si no se puede estimar.
+  DayRmEstimate? dayRmFor(String setId) {
+    final setReps = repsOfSet(setId);
+    if (setReps.isEmpty) return null;
+    final ref = _dayRmRefForSet(setId);
+    if (ref == null) return null;
+    return estimateDayRm(
+      setReps,
+      ref,
+      settings.metric,
+      rom: romRefForSet(setId),
+    );
+  }
+
+  // ------------------------------------------------------------ %1RM objetivo
+
+  /// Objetivo de intensidad de la sesión de la serie [setId] para su
+  /// ejercicio, o null si no hay.
+  RmTarget? rmTargetForSet(String setId) {
+    final s = setById(setId);
+    if (s == null) return null;
+    return sessionById(s.sessionId)?.rmTargets[s.exerciseId];
+  }
+
+  /// Fija (o quita, con null) el %1RM objetivo de [exerciseId] en la sesión
+  /// activa.
+  Future<void> setRmTarget(String exerciseId, RmTarget? target) =>
+      setSessionTarget([exerciseId], rm: target, loss: _keep);
+
+  /// Fija el objetivo de la sesión activa para [exerciseIds]: rango de %1RM
+  /// ([rm]) y pérdida de velocidad máxima ([loss]); null = quitar.
+  Future<void> setSessionTarget(
+    List<String> exerciseIds, {
+    Object? rm = _keep,
+    Object? loss = _keep,
+  }) async {
+    var s = activeSession;
+    if (s == null) return;
+    for (final id in exerciseIds) {
+      if (rm != _keep) s = s!.withRmTarget(id, rm as RmTarget?);
+      if (loss != _keep) s = s!.withLossTarget(id, loss as double?);
+    }
+    await _replaceSession(s!);
+    notifyListeners();
+  }
+
+  static const _keep = Object();
+
+  /// Consejo de carga tras la serie [setId] según el objetivo de su sesión
+  /// y el 1RM del día que indica. Sin perfil propio (sin asignar o con
+  /// pocas cargas), con la relación genérica. null sin objetivo o sin dato.
+  LoadAdvice? loadAdviceFor(String setId) {
+    final target = rmTargetForSet(setId);
+    if (target == null) return null;
+    final setReps = repsOfSet(setId);
+    if (setReps.isEmpty || setReps.first.loadKg <= 0) return null;
+    final e = dayRmFor(setId);
+    if (e != null) {
+      return loadAdvice(
+        load: setReps.first.loadKg,
+        dayRm: e.e1Rm,
+        target: target,
+        step: settings.loadStep,
+      );
+    }
+    if (_dayRmRefForSet(setId) != null) return null; // carga muy ligera
+    return genericLoadAdvice(
+      withValidRom(setReps, romRefForSet(setId)).length >= 2
+          ? withValidRom(setReps, romRefForSet(setId))
+          : setReps,
+      settings.metric,
+      mvt: exerciseById(setById(setId)!.exerciseId).mvt,
+      target: target,
+      step: settings.loadStep,
+    );
+  }
+
+  /// Velocidades de serie (lenta, rápida) que corresponden al objetivo con
+  /// la carga de [setId]: con el perfil del deportista o, si no tiene, con
+  /// la relación genérica. null sin objetivo.
+  (double, double)? velocityZoneFor(String setId) {
+    final target = rmTargetForSet(setId);
+    final s = setById(setId);
+    final load = repsOfSet(setId).firstOrNull?.loadKg;
+    if (target == null || s == null || load == null || load <= 0) return null;
+    final ref = _dayRmRefForSet(setId);
+    if (ref != null) return ref.velocityZone(load, target);
+    final mvt = exerciseById(s.exerciseId).mvt;
+    return (
+      genericVelocityAt(target.max, mvt),
+      genericVelocityAt(target.min, mvt),
+    );
+  }
 
   /// Incluye o excluye a mano una serie del perfil (null = que decida la app).
   void setProfileMark(String setId, ProfileMark? mark) {

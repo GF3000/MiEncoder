@@ -17,7 +17,13 @@ class SilentFeedback extends FeedbackService {
     required bool beepEachRep,
     required bool speak,
     required double velocity,
-  }) async => levels.add(level);
+    bool romShort = false,
+  }) async {
+    levels.add(level);
+    if (romShort) romShorts++;
+  }
+
+  var romShorts = 0;
   @override
   void dispose() {}
 }
@@ -317,4 +323,55 @@ void main() {
     expect(csv[1], contains('Ana'));
     expect(csv[1], contains(';si;'));
   });
+
+  test(
+    '1RM del día: compara con días anteriores, no con el propio día',
+    () async {
+      final ana = await c.addPlayer('Ana');
+      c.setActive(ana.id);
+      c.setExercise('squat');
+      double v(double load) => 1.40 - 1.10 / 120 * load; // 1RM 120 a 0,30
+      void serie(double load, {double d = 0}) {
+        c.setLoad(load);
+        c.onFrame(f(v(load) + d));
+        tick(3);
+        c.onFrame(f(v(load) + d - 0.02));
+        tick(120);
+      }
+
+      now = DateTime(2026, 11, 3, 10);
+      for (final l in [60.0, 80.0, 100.0, 60.0, 80.0, 100.0]) {
+        serie(l); // 12 reps: suficientes también para el ROM de referencia
+      }
+      // Primer día: sin historial anterior → sin dato.
+      expect(c.dayRmFor(c.recentSets().first.id), isNull);
+
+      now = DateTime(2026, 11, 6, 10);
+      serie(70, d: -0.10); // día cansado
+      final e = c.dayRmFor(c.recentSets().first.id)!;
+      expect(e.referenceRm, closeTo(120, 2));
+      expect(e.e1Rm, lessThan(112));
+      expect(e.level, isNot(DayRmLevel.normal));
+
+      // ROM: f() siempre da 50 cm, así que 50 es el habitual de Ana.
+      final romRef = c.romRefForSet(c.recentSets().first.id)!;
+      expect(romRef.target, 50);
+      c.onFrame(parseFrameText('40.00 0.60 0.63 1.00')!); // 10 cm más corta
+      expect(fb.romShorts, 1);
+      await c.updateSettings(c.settings.copyWith(romAlerts: false));
+      c.onFrame(parseFrameText('40.00 0.60 0.63 1.00')!);
+      expect(fb.romShorts, 1);
+      await c.setRomTarget(ana.id, 'squat', 40);
+      expect(c.romRefForSet(c.recentSets().first.id)!.target, 40);
+      expect(c.playerById(ana.id)!.romTargets, {'squat': 40.0});
+      await c.setRomTarget(ana.id, 'squat', null);
+      expect(c.playerById(ana.id)!.romTargets, isEmpty);
+
+      // Con una sola repetición todavía no hay dato.
+      tick(120);
+      c.setLoad(90);
+      c.onFrame(f(v(90)));
+      expect(c.dayRmFor(c.recentSets().first.id), isNull);
+    },
+  );
 }

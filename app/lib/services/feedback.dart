@@ -42,20 +42,28 @@ class FeedbackService {
     required bool beepEachRep,
     required bool speak,
     required double velocity,
+    bool romShort = false,
   }) async {
     try {
-      final player = switch (level) {
+      var player = switch (level) {
         FatigueLevel.stop => _stop,
         FatigueLevel.warning => beepEachRep ? _warning : null,
         FatigueLevel.fresh || FatigueLevel.off => beepEachRep ? _rep : null,
       };
+      // ROM corto sin voz: el pitido de aviso sustituye al normal (el
+      // bocinazo de fatiga manda).
+      if (romShort && _tts == null && player != _stop) player = _warning;
       if (player != null) {
         await player.stop();
         await player.resume();
       }
-      if (speak && _tts != null) {
-        // "85" se entiende mejor que "cero coma ochenta y cinco".
-        await _tts!.speak((velocity * 100).round().toString());
+      // "85" se entiende mejor que "cero coma ochenta y cinco".
+      final words = [
+        if (speak) (velocity * 100).round().toString(),
+        if (romShort) 'corta',
+      ];
+      if (words.isNotEmpty && _tts != null) {
+        await _tts!.speak(words.join(', '));
       }
     } catch (_) {}
   }

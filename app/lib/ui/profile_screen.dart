@@ -9,7 +9,7 @@ import '../app_controller.dart';
 import '../core/analysis.dart';
 import '../core/models.dart';
 import 'common.dart';
-import 'load_picker.dart';
+import 'value_sheets.dart';
 
 class ProfileScreen extends StatefulWidget {
   final AppController c;
@@ -85,7 +85,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return Scaffold(
           appBar: AppBar(title: const Text('Perfil carga-velocidad')),
           floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _addManual(context, c, playerId!, ex.id),
+            onPressed: () => _addManual(context, c, playerId!, ex.id, profile),
             icon: const Icon(Icons.add),
             label: const Text('Punto manual'),
           ),
@@ -142,7 +142,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     mvt: ex.mvt,
                     metricLabel: metric.label,
                   ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
+                _RomRow(c: c, playerId: playerId!, exerciseId: ex.id),
+                const SizedBox(height: 8),
                 Text(
                   'Mejor repetición por carga '
                   '(${analysis.used.length} de ${points.length} en el perfil)',
@@ -173,28 +175,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (setId == null) return;
     final counts = p.status.counts;
     c.setProfileMark(setId, counts ? ProfileMark.exclude : ProfileMark.include);
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            counts
-                ? '${kg(p.loadKg)} kg excluido del perfil'
-                : '${kg(p.loadKg)} kg incluido en el perfil',
-          ),
-          action: SnackBarAction(
-            label: 'Deshacer',
-            onPressed: () => c.setProfileMark(
-              setId,
-              p.status == LvPointStatus.excluded
-                  ? ProfileMark.exclude
-                  : p.status == LvPointStatus.forced
-                  ? ProfileMark.include
-                  : null,
-            ),
-          ),
-        ),
-      );
+    showAppSnack(
+      context,
+      counts
+          ? '${kg(p.loadKg)} kg excluido del perfil'
+          : '${kg(p.loadKg)} kg incluido en el perfil',
+      actionLabel: 'Deshacer',
+      onAction: () => c.setProfileMark(
+        setId,
+        p.status == LvPointStatus.excluded
+            ? ProfileMark.exclude
+            : p.status == LvPointStatus.forced
+            ? ProfileMark.include
+            : null,
+      ),
+    );
   }
 
   Widget _drop(
@@ -228,35 +223,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     AppController c,
     String playerId,
     String exerciseId,
+    LvProfile? profile,
   ) async {
-    final load = await showLoadPicker(
+    final p = await showManualPointSheet(
       context,
-      initial: c.loadKg,
-      title: 'Carga del punto manual',
+      initialLoad: c.loadKg,
+      metricLabel: c.settings.metric.label,
+      velocityAt: profile?.velocityAt,
     );
-    if (load == null || !context.mounted) return;
-    final vel = parseNum(
-      await askText(
-        context,
-        title: 'Velocidad (${c.settings.metric.label}, m/s)',
-        hint: 'p. ej. 0.85',
-        keyboard: const TextInputType.numberWithOptions(decimal: true),
-      ),
-    );
-    if (vel == null || !context.mounted) return;
-    final date = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
-      firstDate: DateTime(2020),
-      lastDate: DateTime.now(),
-    );
-    if (date == null) return;
+    if (p == null) return;
     await c.addManualPoint(
       playerId: playerId,
       exerciseId: exerciseId,
-      loadKg: load,
-      velocity: vel,
-      date: DateTime(date.year, date.month, date.day, 12),
+      loadKg: p.load,
+      velocity: p.velocity,
+      date: DateTime(p.date.year, p.date.month, p.date.day, 12),
     );
   }
 }
@@ -554,6 +535,50 @@ class _PointTile extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// ROM de referencia del deportista en el ejercicio, con opción de fijar un
+/// objetivo a mano (p. ej. sentadilla a cajón) o volver al automático.
+class _RomRow extends StatelessWidget {
+  final AppController c;
+  final String playerId, exerciseId;
+  const _RomRow({
+    required this.c,
+    required this.playerId,
+    required this.exerciseId,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = c.romRefFor(playerId, exerciseId);
+    final text = ref == null
+        ? 'ROM de referencia: faltan repeticiones (mín. $kRomMinReps)'
+        : 'ROM de referencia: ${ref.target.round()} cm ± ${ref.band.round()} '
+              '(${ref.manual ? 'objetivo fijado a mano' : 'automático'})';
+    return Row(
+      children: [
+        const Icon(Icons.straighten, size: 18, color: Colors.white54),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(text, style: const TextStyle(color: Colors.white70)),
+        ),
+        TextButton(
+          key: const Key('rom-target-open'),
+          onPressed: () async {
+            final r = await showRomTargetSheet(
+              context,
+              initial: ref?.target ?? 50,
+              canReset: ref?.manual ?? false,
+            );
+            if (r != null) await c.setRomTarget(playerId, exerciseId, r.cm);
+          },
+          child: Text(
+            ref?.manual ?? false ? 'Cambiar objetivo' : 'Fijar objetivo',
+          ),
+        ),
+      ],
     );
   }
 }

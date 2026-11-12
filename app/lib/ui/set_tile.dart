@@ -36,28 +36,66 @@ class SetTile extends StatelessWidget {
     final sum = summarizeSet(rs, m);
     final player = c.playerById(set.playerId);
     final load = rs.isEmpty ? 0.0 : rs.first.loadKg;
-    final level = sum == null ? c.levelFor(0) : c.levelFor(sum.lossPercent);
+    final level = c.levelFor(sum?.lossPercent ?? 0, setId: set.id);
+    final dayRm = c.dayRmFor(set.id);
+    final romSum = summarizeSetRom(rs, c.romRefForSet(set.id));
+    final romText = romSum == null ? null : setRomText(romSum);
+
+    Future<void> delete() async {
+      final messenger = ScaffoldMessenger.of(context);
+      final theme = Theme.of(context);
+      final deleted = await c.deleteSet(set.id);
+      if (deleted == null) return;
+      final n = deleted.reps.length;
+      if (!messenger.mounted) return;
+      showAppSnackOn(
+        messenger,
+        theme,
+        'Serie borrada ($n rep${n == 1 ? '' : 's'})',
+        actionLabel: 'Deshacer',
+        onAction: () => c.restore(deleted),
+      );
+    }
 
     return Dismissible(
       key: ValueKey('set-${set.id}'),
       direction: DismissDirection.endToStart,
       background: swipeDeleteBackground(),
-      onDismissed: (_) async {
-        final messenger = ScaffoldMessenger.of(context);
-        final theme = Theme.of(context);
-        final deleted = await c.deleteSet(set.id);
-        if (deleted == null) return;
-        final n = deleted.reps.length;
-        if (!messenger.mounted) return;
-        showAppSnackOn(
-          messenger,
-          theme,
-          'Serie borrada ($n rep${n == 1 ? '' : 's'})',
-          actionLabel: 'Deshacer',
-          onAction: () => c.restore(deleted),
-        );
-      },
+      onDismissed: (_) => delete(),
       child: ListTile(
+        onLongPress: () async {
+          final ok = await showModalBottomSheet<bool>(
+            context: context,
+            showDragHandle: true,
+            builder: (ctx) => SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Text(
+                      '${c.exerciseById(set.exerciseId).name} · ${kg(load)} kg · '
+                      '${player?.name ?? 'Sin asignar'}',
+                      style: Theme.of(ctx).textTheme.titleMedium,
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(
+                      Icons.delete_outline,
+                      color: Colors.red,
+                    ),
+                    title: Text(
+                      'Eliminar serie (${rs.length} rep${rs.length == 1 ? '' : 's'})',
+                      style: const TextStyle(color: Colors.red),
+                    ),
+                    onTap: () => Navigator.pop(ctx, true),
+                  ),
+                ],
+              ),
+            ),
+          );
+          if (ok == true) await delete();
+        },
         leading: CircleAvatar(
           backgroundColor: fatigueColor(level).withValues(alpha: 0.25),
           child: Text(
@@ -69,11 +107,25 @@ class SetTile extends StatelessWidget {
           ),
         ),
         title: Text('${c.exerciseById(set.exerciseId).name} · ${kg(load)} kg'),
-        subtitle: Text(
-          sum == null
-              ? DateFormat('HH:mm').format(set.start)
-              : '${DateFormat('HH:mm').format(set.start)} · mejor ${v2(sum.best)} ${m.label} · '
-                    '${lossText(sum.lossPercent)}',
+        subtitle: Text.rich(
+          TextSpan(
+            text: sum == null
+                ? DateFormat('HH:mm').format(set.start)
+                : '${DateFormat('HH:mm').format(set.start)} · mejor ${v2(sum.best)} ${m.label} · '
+                      '${lossText(sum.lossPercent)}',
+            children: [
+              if (dayRm != null)
+                TextSpan(
+                  text: ' · 1RM hoy ${dayRmText(dayRm)}',
+                  style: TextStyle(color: dayRmColor(dayRm.level)),
+                ),
+              if (romText != null)
+                TextSpan(
+                  text: ' · $romText',
+                  style: const TextStyle(color: kWarning),
+                ),
+            ],
+          ),
         ),
         trailing: TextButton(
           onPressed: () async {
@@ -214,7 +266,7 @@ Future<void> showSetDetail(
                       final v = r.velocity(m);
                       if (v > best) best = v;
                       final loss = velocityLossPercent(best, v);
-                      final level = c.levelFor(loss);
+                      final level = c.levelFor(loss, setId: r.setId);
                       return Dismissible(
                         key: ValueKey('rep-${r.id}'),
                         direction: DismissDirection.endToStart,

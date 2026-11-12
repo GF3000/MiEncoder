@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../app_controller.dart';
+import '../core/models.dart';
 import 'common.dart';
 
 /// Normaliza para buscar sin tildes ni mayúsculas.
@@ -248,11 +249,57 @@ Future<void> showSessionSheet(BuildContext context, AppController c) {
                   onPressed: () async {
                     final copy = await askNewSessionCopy(ctx, c);
                     if (copy == null) return;
+                    // El panel sigue abierto para poder fijar el objetivo.
                     await c.newSession(copyPlayers: copy);
-                    if (ctx.mounted) Navigator.pop(ctx);
                   },
                 ),
               ),
+              if (s != null) ...[
+                const _Section('Objetivo por ejercicio'),
+                for (final e in c.exercises)
+                  Builder(
+                    builder: (_) {
+                      final rm = s.rmTargets[e.id];
+                      final loss = s.lossTargets[e.id];
+                      final has = rm != null || loss != null;
+                      return ListTile(
+                        key: Key('rm-target-${e.id}'),
+                        dense: true,
+                        leading: Icon(
+                          Icons.speed,
+                          color: has
+                              ? Theme.of(ctx).colorScheme.primary
+                              : Colors.white38,
+                        ),
+                        title: Text(e.name),
+                        trailing: Text(
+                          has ? sessionTargetText(rm, loss) : 'Sin objetivo',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: has ? null : Colors.white54,
+                          ),
+                        ),
+                        onTap: () async {
+                          final r = await askSessionTarget(
+                            ctx,
+                            exerciseName: e.name,
+                            rm: rm,
+                            loss: loss,
+                            defaultLoss: c.settings.velocityLossThreshold,
+                          );
+                          if (r == null) return;
+                          await c.setSessionTarget(
+                            r.applyToAll
+                                ? [for (final x in c.exercises) x.id]
+                                : [e.id],
+                            rm: r.rm,
+                            loss: r.loss,
+                          );
+                        },
+                      );
+                    },
+                  ),
+              ],
               if (recent.isNotEmpty)
                 const _Section('Retomar una sesión anterior'),
               for (final r in recent)
@@ -338,4 +385,218 @@ Future<void> askContinueOrNewSession(
   );
   if (choice == 'copy') await c.newSession(copyPlayers: true);
   if (choice == 'empty') await c.newSession(copyPlayers: false);
+}
+
+/// Resultado del panel de objetivo. null en [rm] o [loss] = sin valor.
+typedef SessionTargetChoice = ({RmTarget? rm, double? loss, bool applyToAll});
+
+/// Rangos de intensidad habituales en VBT (null = sin objetivo).
+const List<(String, RmTarget?)> kRmPresets = [
+  ('Potencia', RmTarget(50, 65)),
+  ('Hipertrofia', RmTarget(65, 75)),
+  ('Fuerza-hip.', RmTarget(75, 85)),
+  ('Fuerza', RmTarget(85, 95)),
+  ('Sin objetivo', null),
+];
+
+/// Pérdidas de velocidad máximas de un toque.
+const List<double> kLossPresets = [10, 15, 20, 25, 30, 40];
+
+/// Límites del deslizador de %1RM.
+const double _rmMin = 30, _rmMax = 100;
+
+/// Panel (sin teclado) con el objetivo de un ejercicio en la sesión: rango
+/// de %1RM y pérdida de velocidad máxima. null = cancelar.
+Future<SessionTargetChoice?> askSessionTarget(
+  BuildContext context, {
+  required String exerciseName,
+  RmTarget? rm,
+  double? loss,
+  required double defaultLoss,
+}) {
+  return showModalBottomSheet<SessionTargetChoice>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (ctx) => _TargetSheet(
+      exerciseName: exerciseName,
+      rm: rm,
+      loss: loss,
+      defaultLoss: defaultLoss,
+    ),
+  );
+}
+
+class _TargetSheet extends StatefulWidget {
+  final String exerciseName;
+  final RmTarget? rm;
+  final double? loss;
+  final double defaultLoss;
+
+  const _TargetSheet({
+    required this.exerciseName,
+    this.rm,
+    this.loss,
+    required this.defaultLoss,
+  });
+
+  @override
+  State<_TargetSheet> createState() => _TargetSheetState();
+}
+
+class _TargetSheetState extends State<_TargetSheet> {
+  late RmTarget? rm = widget.rm == null
+      ? null
+      : RmTarget(
+          widget.rm!.min.clamp(_rmMin, _rmMax).toDouble(),
+          widget.rm!.max.clamp(_rmMin, _rmMax).toDouble(),
+        );
+  late double? loss = widget.loss;
+
+  /// Último rango usado, para que el deslizador no salte al quitar el
+  /// objetivo y volver a ponerlo.
+  late RmTarget lastRm = rm ?? const RmTarget(70, 80);
+
+  void _done(bool all) =>
+      Navigator.pop(context, (rm: rm, loss: loss, applyToAll: all));
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final primary = theme.colorScheme.primary;
+    final losses = {...kLossPresets, ?loss}.toList()..sort();
+
+    Widget header(String title, String value, {bool dim = false}) => Row(
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        Expanded(child: Text(title, style: theme.textTheme.titleMedium)),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.w700,
+            color: dim ? Colors.white54 : primary,
+          ),
+        ),
+      ],
+    );
+
+    final slider = rm ?? lastRm;
+    return SafeArea(
+      top: false,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Objetivo · ${widget.exerciseName}',
+                    style: theme.textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 16),
+                  header(
+                    'Intensidad (%1RM)',
+                    rm == null ? 'Sin objetivo' : rmTargetText(rm!),
+                    dim: rm == null,
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final (i, (label, t)) in kRmPresets.indexed)
+                        ChoiceChip(
+                          key: Key('rm-preset-$i'),
+                          label: Text(
+                            t == null ? label : '$label ${rmTargetText(t)}',
+                          ),
+                          selected: rm == t,
+                          onSelected: (_) => setState(() {
+                            rm = t;
+                            if (t != null) lastRm = t;
+                          }),
+                        ),
+                    ],
+                  ),
+                  RangeSlider(
+                    key: const Key('rm-slider'),
+                    min: _rmMin,
+                    max: _rmMax,
+                    divisions: ((_rmMax - _rmMin) / 5).round(),
+                    values: RangeValues(slider.min, slider.max),
+                    labels: RangeLabels(
+                      '${kg(slider.min)} %',
+                      '${kg(slider.max)} %',
+                    ),
+                    activeColor: rm == null ? Colors.white24 : null,
+                    onChanged: (v) => setState(() {
+                      rm = lastRm = RmTarget(
+                        v.start.roundToDouble(),
+                        v.end.roundToDouble(),
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 12),
+                  header(
+                    'Pérdida de velocidad máxima',
+                    '${kg(loss ?? widget.defaultLoss)} %',
+                    dim: loss == null,
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final l in losses)
+                        ChoiceChip(
+                          key: Key('loss-${kg(l)}'),
+                          label: Text('${kg(l)} %'),
+                          selected: loss == l,
+                          onSelected: (_) => setState(() => loss = l),
+                        ),
+                      ChoiceChip(
+                        key: const Key('loss-default'),
+                        label: Text('Ajustes (${kg(widget.defaultLoss)} %)'),
+                        selected: loss == null,
+                        onSelected: (_) => setState(() => loss = null),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            child: Row(
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancelar'),
+                ),
+                const Spacer(),
+                OutlinedButton(
+                  key: const Key('rm-target-save-all'),
+                  onPressed: () => _done(true),
+                  child: const Text('Guardar en todos'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  key: const Key('rm-target-save'),
+                  onPressed: () => _done(false),
+                  child: const Text('Guardar'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

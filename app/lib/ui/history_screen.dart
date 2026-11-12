@@ -158,7 +158,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       padding: EdgeInsets.all(16),
                       child: Text(
                         'Toca una serie para ver y mover sus repeticiones. Toca el nombre '
-                        'para asignar la serie entera. Mantén pulsada una serie para borrarla.',
+                        'para asignar la serie entera. Mantén pulsada una serie (o deslízala '
+                        'a la izquierda) para borrarla.',
                         style: TextStyle(color: Colors.white38, fontSize: 12),
                       ),
                     ),

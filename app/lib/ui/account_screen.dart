@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/auth.dart';
 import '../services/sync.dart';
+import 'common.dart';
 
 /// Texto corto con el estado de la sincronización.
 String syncSummary(SyncService? sync) {
@@ -222,9 +223,7 @@ class _SignInFormState extends State<_SignInForm> {
     }
     await widget.auth.sendPasswordReset(_email.text);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Te hemos enviado un email.')),
-      );
+      showAppSnack(context, 'Te hemos enviado un email.');
     }
   });
 
