@@ -150,13 +150,29 @@ void main() {
       c = await build();
     });
 
+    late String lastSetId;
+
     Future<void> doSet(double load, double mpv) async {
       c.setLoad(load);
       for (final d in [0.0, -0.01, -0.03]) {
         now = now.add(const Duration(seconds: 3));
         c.onFrame(f(mpv + d));
       }
+      lastSetId = c.lastLive!.rep.setId;
+      c.forceNewSet(); // misma carga = serie nueva
       now = now.add(const Duration(minutes: 3));
+    }
+
+    /// Perfil de Ana el día anterior (1RM ≈ 120 kg) y hoy con objetivo.
+    Future<void> anaWithProfile(RmTarget target) async {
+      final ana = await c.createAndAddToSession('Ana');
+      c.setActive(ana.id);
+      c.setExercise('squat');
+      for (final load in [60.0, 80.0, 100.0]) {
+        await doSet(load, v(load));
+      }
+      now = DateTime(2026, 11, 11, 10);
+      await c.setRmTarget('squat', target);
     }
 
     test('el objetivo se guarda en la sesión activa', () async {
@@ -178,10 +194,10 @@ void main() {
       now = DateTime(2026, 11, 11, 10);
       await c.setRmTarget('squat', t);
       // La serie del día anterior no tiene perfil previo: consejo genérico.
-      expect(c.loadAdviceFor(c.lastLive!.rep.setId)!.generic, isTrue);
+      expect(c.loadAdviceFor(lastSetId)!.generic, isTrue);
 
       await doSet(80, v(80)); // 67 % del 1RM del día
-      final setId = c.lastLive!.rep.setId;
+      final setId = lastSetId;
       final a = c.loadAdviceFor(setId)!;
       expect(a.generic, isFalse);
       expect(a.kind, LoadAdviceKind.up);
@@ -198,7 +214,7 @@ void main() {
       await c.setRmTarget('squat', t);
       // 0,90 m/s en sentadilla ≈ 62 % según la relación genérica.
       await doSet(100, 0.90);
-      final setId = c.lastLive!.rep.setId;
+      final setId = lastSetId;
       final a = c.loadAdviceFor(setId)!;
       expect(a.generic, isTrue);
       expect(a.kind, LoadAdviceKind.up);
@@ -214,7 +230,7 @@ void main() {
         c.setExercise('squat');
         await c.setSessionTarget(['squat'], loss: 10.0);
         await doSet(100, 0.60);
-        final setId = c.lastLive!.rep.setId;
+        final setId = lastSetId;
         expect(c.lossThresholdForSet(setId), 10);
         // Última rep: 0,57 frente a 0,60 → 5 %; con 0,53 → 11,7 % ≥ 10 %.
         expect(c.levelFor(11.7, setId: setId), FatigueLevel.stop);
@@ -236,6 +252,91 @@ void main() {
       }
       final back = TrainingSession.fromJson(s.toJson());
       expect(back.lossTargets, s.lossTargets);
+    });
+
+    test(
+      'el 1RM del día queda fijado: la fatiga entre series no lo baja',
+      () async {
+        const tgt = RmTarget(75, 85);
+        await anaWithProfile(tgt);
+        await doSet(95, v(95)); // 1RM del día ≈ 120 → 79 %
+        final a1 = c.loadAdviceFor(lastSetId)!;
+        expect(a1.kind, LoadAdviceKind.keep);
+
+        await doSet(95, v(95) - 0.10); // cansado: por sí sola, 1RM ≈ 109 → 87 %
+        final tired = lastSetId;
+        expect(
+          c.dayRmFor(tired)!.e1Rm,
+          lessThan(112),
+        ); // la comparación sí baja
+        final a2 = c.loadAdviceFor(tired)!;
+        expect(a2.kind, LoadAdviceKind.keep); // ...pero no dice «Baja»
+        expect(a2.percent, closeTo(a1.percent, 0.5));
+
+        await doSet(95, v(95) + 0.08); // más rápida: el 1RM del día sube
+        final a3 = c.loadAdviceFor(lastSetId)!;
+        expect(a3.percent, lessThan(a1.percent));
+        expect(a3.kind, LoadAdviceKind.up);
+      },
+    );
+
+    test('genérico: también con el máximo de las series del día', () async {
+      c.setActive(null);
+      c.setExercise('squat');
+      await c.setRmTarget('squat', const RmTarget(60, 70));
+      await doSet(100, 0.90); // ≈ 62 %
+      final first = c.loadAdviceFor(lastSetId)!;
+      await doSet(100, 0.70); // cansado
+      final second = c.loadAdviceFor(lastSetId)!;
+      expect(second.generic, isTrue);
+      expect(second.percent, closeTo(first.percent, 0.5));
+    });
+
+    test('interruptores: sin consejo y sin genérico', () async {
+      c.setActive(null);
+      c.setExercise('squat');
+      await c.setRmTarget('squat', t);
+      await doSet(100, 0.90);
+      final setId = lastSetId;
+      expect(c.loadAdviceFor(setId), isNotNull);
+
+      await c.updateSettings(c.settings.copyWith(loadAdvice: false));
+      expect(c.loadAdviceFor(setId), isNull);
+      expect(c.velocityZoneFor(setId), isNotNull); // el objetivo sí se ve
+
+      await c.updateSettings(
+        c.settings.copyWith(loadAdvice: true, genericWithoutProfile: false),
+      );
+      expect(c.loadAdviceFor(setId), isNull);
+      expect(c.velocityZoneFor(setId), isNull);
+    });
+  });
+
+  group('Ajustes de análisis en vivo', () {
+    test('activados por defecto y tolerantes a JSON antiguo', () {
+      const d = Settings();
+      expect(
+        d.compareProfileRm && d.loadAdvice && d.genericWithoutProfile,
+        isTrue,
+      );
+      final old = Settings.fromJson({'loss': 20});
+      expect(
+        old.compareProfileRm && old.loadAdvice && old.genericWithoutProfile,
+        isTrue,
+      );
+      final off = Settings.fromJson(
+        d
+            .copyWith(
+              compareProfileRm: false,
+              loadAdvice: false,
+              genericWithoutProfile: false,
+            )
+            .toJson(),
+      );
+      expect(
+        off.compareProfileRm || off.loadAdvice || off.genericWithoutProfile,
+        isFalse,
+      );
     });
   });
 }

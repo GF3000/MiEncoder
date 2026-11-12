@@ -108,6 +108,36 @@ class SettingsScreen extends StatelessWidget {
                 value: s.romAlerts,
                 onChanged: (v) => c.updateSettings(s.copyWith(romAlerts: v)),
               ),
+              const _Header('Análisis en vivo'),
+              SwitchListTile(
+                key: const Key('setting-compare-rm'),
+                title: const Text('Comparar con el 1RM del perfil'),
+                subtitle: const Text(
+                  '"1RM hoy ≈ … · perfil …" y cuánto está por encima o debajo',
+                ),
+                value: s.compareProfileRm,
+                onChanged: (v) =>
+                    c.updateSettings(s.copyWith(compareProfileRm: v)),
+              ),
+              SwitchListTile(
+                key: const Key('setting-load-advice'),
+                title: const Text('Consejo de carga'),
+                subtitle: const Text(
+                  'Sube / mantén / baja según el %1RM objetivo de la sesión',
+                ),
+                value: s.loadAdvice,
+                onChanged: (v) => c.updateSettings(s.copyWith(loadAdvice: v)),
+              ),
+              SwitchListTile(
+                key: const Key('setting-generic'),
+                title: const Text('Usar relación genérica sin perfil'),
+                subtitle: const Text(
+                  'Consejo y zona aproximados sin asignar o con menos de 3 cargas',
+                ),
+                value: s.genericWithoutProfile,
+                onChanged: (v) =>
+                    c.updateSettings(s.copyWith(genericWithoutProfile: v)),
+              ),
               const _Header('Series'),
               const ListTile(
                 dense: true,

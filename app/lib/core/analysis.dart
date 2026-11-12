@@ -693,27 +693,14 @@ double genericPercentRm(double v, double mvt) =>
 double genericVelocityAt(double percent, double mvt) =>
     mvt + kGenericVelocitySpan * (100 - percent) / 60;
 
-/// Consejo de carga sin perfil propio: el %1RM sale de la velocidad de la
-/// serie con la relación genérica. null si la serie no tiene 2
-/// repeticiones o la velocidad cae fuera de 40–105 %.
-LoadAdvice? genericLoadAdvice(
-  List<Rep> setReps,
-  VelocityMetric metric, {
-  required double mvt,
-  required RmTarget target,
-  required double step,
-}) {
-  if (setReps.isEmpty) return null;
+/// 1RM que indica una serie según la relación genérica (sin perfil
+/// propio): carga · 100 / %1RM de su velocidad. null si la serie no tiene
+/// 2 repeticiones o la velocidad cae fuera de 40–105 %.
+double? genericE1Rm(List<Rep> setReps, VelocityMetric metric, double mvt) {
+  if (setReps.isEmpty || setReps.first.loadKg <= 0) return null;
   final v = setVelocity(setReps, metric);
   if (v == null) return null;
   final pct = genericPercentRm(v, mvt);
   if (pct < kDayRmMinPercentLoad || pct > 105) return null;
-  final load = setReps.first.loadKg;
-  return loadAdvice(
-    load: load,
-    dayRm: load * 100 / pct,
-    target: target,
-    step: step,
-    generic: true,
-  );
+  return setReps.first.loadKg * 100 / pct;
 }

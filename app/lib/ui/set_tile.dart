@@ -37,7 +37,7 @@ class SetTile extends StatelessWidget {
     final player = c.playerById(set.playerId);
     final load = rs.isEmpty ? 0.0 : rs.first.loadKg;
     final level = c.levelFor(sum?.lossPercent ?? 0, setId: set.id);
-    final dayRm = c.dayRmFor(set.id);
+    final dayRm = c.settings.compareProfileRm ? c.dayRmFor(set.id) : null;
     final romSum = summarizeSetRom(rs, c.romRefForSet(set.id));
     final romText = romSum == null ? null : setRomText(romSum);
 

@@ -1014,38 +1014,72 @@ class AppController extends ChangeNotifier {
 
   static const _keep = Object();
 
-  /// Consejo de carga tras la serie [setId] según el objetivo de su sesión
-  /// y el 1RM del día que indica. Sin perfil propio (sin asignar o con
-  /// pocas cargas), con la relación genérica. null sin objetivo o sin dato.
+  /// Series del mismo deportista (o sin asignar), ejercicio, sesión y día
+  /// que [setId], hasta ella incluida.
+  Iterable<String> _daySetsUpTo(String setId) {
+    final s = setById(setId);
+    final t = repsOfSet(setId).firstOrNull?.time;
+    if (s == null || t == null) return const [];
+    return [
+      for (final x in sets)
+        if (x.playerId == s.playerId &&
+            x.exerciseId == s.exerciseId &&
+            x.sessionId == s.sessionId)
+          if (repsOfSet(x.id).firstOrNull?.time case final u?
+              when _sameDay(u, t) && !u.isAfter(t))
+            x.id,
+    ];
+  }
+
+  /// 1RM del día FIJADO para la serie [setId]: el máximo de los 1RM que
+  /// indican las series válidas de ese día hasta ella. La fatiga entre
+  /// series no lo baja (sí lo sube una serie más rápida). Con perfil propio
+  /// sale de [dayRmFor]; sin él, de la relación genérica ([generic] true).
+  /// null si aún no hay ninguna serie válida.
+  ({double rm, bool generic})? fixedDayRmFor(String setId) {
+    final s = setById(setId);
+    if (s == null) return null;
+    final withProfile = _dayRmRefForSet(setId) != null;
+    if (!withProfile && !settings.genericWithoutProfile) return null;
+    final mvt = exerciseById(s.exerciseId).mvt;
+    double? best;
+    for (final id in _daySetsUpTo(setId)) {
+      final e1 = withProfile ? dayRmFor(id)?.e1Rm : _genericE1Rm(id, mvt);
+      if (e1 != null && e1.isFinite && (best == null || e1 > best)) best = e1;
+    }
+    return best == null ? null : (rm: best, generic: !withProfile);
+  }
+
+  double? _genericE1Rm(String setId, double mvt) {
+    final reps = repsOfSet(setId);
+    final valid = withValidRom(reps, romRefForSet(setId));
+    return genericE1Rm(valid.length >= 2 ? valid : reps, settings.metric, mvt);
+  }
+
+  /// Consejo de carga tras la serie [setId] según el objetivo de su sesión,
+  /// sobre el 1RM del día fijado ([fixedDayRmFor]). null si está apagado en
+  /// los ajustes, sin objetivo o sin dato.
   LoadAdvice? loadAdviceFor(String setId) {
+    if (!settings.loadAdvice) return null;
     final target = rmTargetForSet(setId);
     if (target == null) return null;
-    final setReps = repsOfSet(setId);
-    if (setReps.isEmpty || setReps.first.loadKg <= 0) return null;
-    final e = dayRmFor(setId);
-    if (e != null) {
-      return loadAdvice(
-        load: setReps.first.loadKg,
-        dayRm: e.e1Rm,
-        target: target,
-        step: settings.loadStep,
-      );
-    }
-    if (_dayRmRefForSet(setId) != null) return null; // carga muy ligera
-    return genericLoadAdvice(
-      withValidRom(setReps, romRefForSet(setId)).length >= 2
-          ? withValidRom(setReps, romRefForSet(setId))
-          : setReps,
-      settings.metric,
-      mvt: exerciseById(setById(setId)!.exerciseId).mvt,
+    final load = repsOfSet(setId).firstOrNull?.loadKg ?? 0;
+    if (load <= 0) return null;
+    final day = fixedDayRmFor(setId);
+    if (day == null) return null;
+    return loadAdvice(
+      load: load,
+      dayRm: day.rm,
       target: target,
       step: settings.loadStep,
+      generic: day.generic,
     );
   }
 
   /// Velocidades de serie (lenta, rápida) que corresponden al objetivo con
-  /// la carga de [setId]: con el perfil del deportista o, si no tiene, con
-  /// la relación genérica. null sin objetivo.
+  /// la carga de [setId]: con el perfil del deportista o, si no tiene (y
+  /// está activado en los ajustes), con la relación genérica. null sin
+  /// objetivo.
   (double, double)? velocityZoneFor(String setId) {
     final target = rmTargetForSet(setId);
     final s = setById(setId);
@@ -1053,6 +1087,7 @@ class AppController extends ChangeNotifier {
     if (target == null || s == null || load == null || load <= 0) return null;
     final ref = _dayRmRefForSet(setId);
     if (ref != null) return ref.velocityZone(load, target);
+    if (!settings.genericWithoutProfile) return null;
     final mvt = exerciseById(s.exerciseId).mvt;
     return (
       genericVelocityAt(target.max, mvt),

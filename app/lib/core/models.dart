@@ -354,6 +354,16 @@ class Settings {
   /// Avisar (voz o pitido) cuando una repetición tiene el ROM corto.
   final bool romAlerts;
 
+  /// Análisis en vivo: comparar el 1RM del día con el del perfil.
+  final bool compareProfileRm;
+
+  /// Análisis en vivo: consejo de subir / mantener / bajar la carga.
+  final bool loadAdvice;
+
+  /// Análisis en vivo: consejo y zona con la relación genérica cuando el
+  /// deportista no tiene perfil propio (o la serie no tiene deportista).
+  final bool genericWithoutProfile;
+
   const Settings({
     this.velocityLossThreshold = 20,
     this.fatigueEnabled = true,
@@ -362,6 +372,9 @@ class Settings {
     this.speakVelocity = false,
     this.loadStep = 2.5,
     this.romAlerts = true,
+    this.compareProfileRm = true,
+    this.loadAdvice = true,
+    this.genericWithoutProfile = true,
   });
 
   Settings copyWith({
@@ -372,6 +385,9 @@ class Settings {
     bool? speakVelocity,
     double? loadStep,
     bool? romAlerts,
+    bool? compareProfileRm,
+    bool? loadAdvice,
+    bool? genericWithoutProfile,
   }) => Settings(
     velocityLossThreshold: velocityLossThreshold ?? this.velocityLossThreshold,
     fatigueEnabled: fatigueEnabled ?? this.fatigueEnabled,
@@ -380,6 +396,9 @@ class Settings {
     speakVelocity: speakVelocity ?? this.speakVelocity,
     loadStep: loadStep ?? this.loadStep,
     romAlerts: romAlerts ?? this.romAlerts,
+    compareProfileRm: compareProfileRm ?? this.compareProfileRm,
+    loadAdvice: loadAdvice ?? this.loadAdvice,
+    genericWithoutProfile: genericWithoutProfile ?? this.genericWithoutProfile,
   );
 
   Map<String, Object?> toJson() => {
@@ -390,6 +409,9 @@ class Settings {
     'speak': speakVelocity,
     'loadStep': loadStep,
     'romAlerts': romAlerts,
+    'compareRm': compareProfileRm,
+    'advice': loadAdvice,
+    'generic': genericWithoutProfile,
   };
 
   factory Settings.fromJson(Map<String, Object?> j) => Settings(
@@ -403,5 +425,8 @@ class Settings {
     speakVelocity: (j['speak'] as bool?) ?? false,
     loadStep: (j['loadStep'] as num?)?.toDouble() ?? 2.5,
     romAlerts: (j['romAlerts'] as bool?) ?? true,
+    compareProfileRm: (j['compareRm'] as bool?) ?? true,
+    loadAdvice: (j['advice'] as bool?) ?? true,
+    genericWithoutProfile: (j['generic'] as bool?) ?? true,
   );
 }

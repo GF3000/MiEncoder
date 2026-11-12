@@ -315,7 +315,7 @@ class _BigReadout extends StatelessWidget {
         final r = live.rep;
         final color = fatigueColor(live.level);
         final player = c.playerById(c.setById(r.setId)?.playerId);
-        final dayRm = c.dayRmFor(r.setId);
+        final dayRm = c.settings.compareProfileRm ? c.dayRmFor(r.setId) : null;
         final target = c.rmTargetForSet(r.setId);
         final advice = target == null ? null : c.loadAdviceFor(r.setId);
         final zone = target == null ? null : c.velocityZoneFor(r.setId);
