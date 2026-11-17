@@ -137,6 +137,33 @@ DateTime? sinceForPeriod(String period, {DateTime? now}) {
   return n.subtract(Duration(days: days));
 }
 
+/// Periodo anterior de la misma duración que [period]: (desde, hasta).
+/// "Hoy" → ayer. null para "Todo".
+(DateTime, DateTime)? previousPeriod(String period, {DateTime? now}) {
+  final days = kPeriods[period];
+  final since = sinceForPeriod(period, now: now);
+  if (days == null || since == null) return null;
+  return (since.subtract(Duration(days: days == 0 ? 1 : days)), since);
+}
+
+/// "vs ayer", "vs los 30 días anteriores".
+String previousPeriodLabel(String period) {
+  final days = kPeriods[period];
+  return days == 0 ? 'vs ayer' : 'vs los $days días anteriores';
+}
+
+/// Texto en minúsculas y sin tildes, para buscar.
+String searchKey(String s) {
+  const from = 'áàäâéèëêíìïîóòöôúùüûñç';
+  const to = 'aaaaeeeeiiiioooouuuunc';
+  final b = StringBuffer();
+  for (final ch in s.toLowerCase().split('')) {
+    final i = from.indexOf(ch);
+    b.write(i < 0 ? ch : to[i]);
+  }
+  return b.toString();
+}
+
 /// Duración de un aviso sin acción.
 const kSnackDuration = Duration(seconds: 3);
 

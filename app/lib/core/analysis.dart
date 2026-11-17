@@ -706,3 +706,252 @@ double? genericE1Rm(List<Rep> setReps, VelocityMetric metric, double mvt) {
   if (pct < kDayRmMinPercentLoad || pct > 105) return null;
   return setReps.first.loadKg * 100 / pct;
 }
+
+// ------------------------------------------------------------ comparar
+
+const double kGravity = 9.81;
+
+/// Por debajo de este R² (o con menos de [kDayRmMinLoads] cargas) un dato
+/// del perfil se marca como poco fiable al comparar deportistas.
+const double kCompareMinR2 = 0.9;
+
+/// Métricas por ejercicio para comparar deportistas.
+enum CompareMetric {
+  /// 1RM estimado con la VMT del ejercicio (kg).
+  oneRm('1RM', 'kg', 0),
+
+  /// Velocidad teórica a carga 0 (m/s).
+  v0('V0', 'm/s', 2),
+
+  /// Carga teórica a velocidad 0 (kg).
+  l0('L0', 'kg', 0),
+
+  /// Potencia máxima teórica de la recta: g·V0·L0/4 (W).
+  pmax('Pmax', 'W', 0),
+
+  /// Carga a la que se da la potencia máxima: L0/2 (kg).
+  optimalLoad('Carga Pmax', 'kg', 1),
+
+  /// ROM de referencia (cm).
+  rom('ROM', 'cm', 0);
+
+  final String label, unit;
+  final int decimals;
+  const CompareMetric(this.label, this.unit, this.decimals);
+
+  String format(double v) => v.toStringAsFixed(decimals);
+}
+
+/// Por qué un deportista no tiene una métrica.
+enum MetricGap {
+  /// Nunca ha hecho el ejercicio.
+  neverDone,
+
+  /// Lo ha hecho, pero no en el periodo elegido.
+  noDataInPeriod,
+
+  /// Menos de 2 cargas distintas en el perfil.
+  fewLoads,
+
+  /// La velocidad no baja con la carga, o el resultado no tiene sentido
+  /// (p. ej. V0 por debajo de la VMT).
+  noSlope,
+
+  /// No hay ROM fijado ni repeticiones suficientes para calcularlo.
+  fewRomReps;
+
+  String get text => switch (this) {
+    neverDone => 'No ha hecho este ejercicio',
+    noDataInPeriod => 'Sin datos en este periodo',
+    fewLoads => 'Hacen falta al menos 2 cargas distintas',
+    noSlope => 'Perfil no válido: la velocidad no baja con la carga',
+    fewRomReps => 'Faltan repeticiones para el ROM (mín. $kRomMinReps)',
+  };
+}
+
+/// Valor de una métrica: [value] o el motivo de que falte ([gap]). Si
+/// [weakReason] no es null, el valor existe pero es poco fiable.
+class MetricValue {
+  final double? value;
+  final MetricGap? gap;
+  final String? weakReason;
+
+  const MetricValue(double this.value, {this.weakReason}) : gap = null;
+  const MetricValue.missing(MetricGap this.gap)
+    : value = null,
+      weakReason = null;
+
+  bool get weak => weakReason != null;
+}
+
+/// Métrica del perfil carga-velocidad [analysis] (o del ROM [rom]).
+/// [everDone] = el deportista tiene alguna repetición en el ejercicio
+/// (fuera del periodo también).
+MetricValue compareMetricValue(
+  CompareMetric metric, {
+  required LvAnalysis analysis,
+  required RomReference? rom,
+  required double mvt,
+  required bool everDone,
+}) {
+  if (!everDone) return const MetricValue.missing(MetricGap.neverDone);
+  if (metric == CompareMetric.rom) {
+    if (rom == null) return const MetricValue.missing(MetricGap.fewRomReps);
+    return MetricValue(rom.target);
+  }
+  if (analysis.points.isEmpty) {
+    return const MetricValue.missing(MetricGap.noDataInPeriod);
+  }
+  final p = analysis.profile;
+  if (p == null) {
+    return MetricValue.missing(
+      analysis.used.length < 2 ? MetricGap.fewLoads : MetricGap.noSlope,
+    );
+  }
+  final v0 = p.intercept;
+  final l0 = -p.intercept / p.slope;
+  final value = switch (metric) {
+    CompareMetric.oneRm => p.estimated1Rm(mvt),
+    CompareMetric.v0 => v0,
+    CompareMetric.l0 => l0,
+    CompareMetric.pmax => kGravity * v0 * l0 / 4,
+    CompareMetric.optimalLoad => l0 / 2,
+    CompareMetric.rom => throw StateError('ROM se trata arriba'),
+  };
+  if (!value.isFinite || value <= 0) {
+    return const MetricValue.missing(MetricGap.noSlope);
+  }
+  final loads = analysis.used.length;
+  final weak = loads < kDayRmMinLoads
+      ? 'Solo $loads cargas'
+      : p.r2 < kCompareMinR2
+      ? 'R² ${p.r2.toStringAsFixed(2)}'
+      : null;
+  return MetricValue(value, weakReason: weak);
+}
+
+/// Mediana de [xs] (no vacía).
+double median(List<double> xs) => _median(xs);
+
+/// Comparador que deja siempre los valores que faltan (null) al final.
+int compareNullableLast(double? a, double? b, {bool ascending = true}) {
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  return ascending ? a.compareTo(b) : b.compareTo(a);
+}
+
+// ------------------------------------------------------------ evolución
+
+/// 1RM estimado al final de una semana.
+class TrendPoint {
+  /// Fin de la semana (lunes siguiente a las 00:00).
+  final DateTime end;
+  final double oneRm;
+  const TrendPoint(this.end, this.oneRm);
+}
+
+/// Lunes a las 00:00 de la semana de [t].
+DateTime weekStart(DateTime t) =>
+    DateTime(t.year, t.month, t.day).subtract(Duration(days: t.weekday - 1));
+
+/// Evolución del 1RM: para cada semana con repeticiones, el 1RM del perfil
+/// con los [windowDays] días que acaban con esa semana. Solo cuenta si el
+/// perfil tiene al menos [kDayRmMinLoads] cargas. Como mucho [maxWeeks]
+/// semanas (las últimas).
+List<TrendPoint> oneRmTrend(
+  List<Rep> reps,
+  VelocityMetric metric,
+  double mvt, {
+  Map<String, ProfileMark> marks = const {},
+  int windowDays = 90,
+  int maxWeeks = 26,
+}) {
+  final weeks = {for (final r in reps) weekStart(r.time)}.toList()..sort();
+  final out = <TrendPoint>[];
+  for (final w in weeks.skip(math.max(0, weeks.length - maxWeeks))) {
+    final end = w.add(const Duration(days: 7));
+    final from = end.subtract(Duration(days: windowDays));
+    final window = [
+      for (final r in reps)
+        if (!r.time.isBefore(from) && r.time.isBefore(end)) r,
+    ];
+    final a = analyzeLoadVelocity(window, metric, marks: marks);
+    final rm = a.profile?.estimated1Rm(mvt);
+    if (rm == null || a.used.length < kDayRmMinLoads) continue;
+    if (!rm.isFinite || rm <= 0) continue;
+    out.add(TrendPoint(end, rm));
+  }
+  return out;
+}
+
+/// La evolución solo se muestra con al menos [kTrendMinWeeks] semanas con
+/// perfil válido repartidas en [kTrendMinSpanDays] días o más: con menos,
+/// la línea dibuja ruido (el 1RM estimado varía ±3–5 % de un día a otro).
+const int kTrendMinWeeks = 4;
+const int kTrendMinSpanDays = 35;
+
+bool trendIsMeaningful(List<TrendPoint> t) =>
+    t.length >= kTrendMinWeeks &&
+    t.last.end.difference(t.first.end).inDays >= kTrendMinSpanDays;
+
+/// Cambio del 1RM ([now] frente a [prev]) en %.
+double rmChangePercent(double now, double prev) => (now / prev - 1) * 100;
+
+/// El cambio supera el rango normal de la persona ([band], ±%): si no, es
+/// ruido y se muestra como "≈ igual".
+bool rmChangeIsReal(double now, double prev, double band) =>
+    rmChangePercent(now, prev).abs() >= band;
+
+/// Zonas de entrenamiento por %1RM para sombrear el perfil.
+const kLoadZones = <(double, double, String)>[
+  (0, 60, 'Velocidad'),
+  (60, 80, 'Fuerza-vel.'),
+  (80, 100, 'Fuerza'),
+];
+
+// ------------------------------------------------------------ cuadrantes
+
+extension CompareMetricKind on CompareMetric {
+  /// Métricas de fuerza (carga).
+  bool get isForce =>
+      this == CompareMetric.oneRm ||
+      this == CompareMetric.l0 ||
+      this == CompareMetric.optimalLoad;
+
+  /// Métricas de velocidad.
+  bool get isSpeed => this == CompareMetric.v0;
+
+  /// Más es mejor (para teñir el cuadrante bueno). El ROM no lo es.
+  bool get higherIsBetter => this != CompareMetric.rom;
+}
+
+extension MetricGapShort on MetricGap {
+  /// Motivo corto, para escribirlo en la propia fila.
+  String get short => switch (this) {
+    MetricGap.neverDone => 'No lo ha hecho',
+    MetricGap.noDataInPeriod => 'Sin datos en el periodo',
+    MetricGap.fewLoads => '1 carga',
+    MetricGap.noSlope => 'Perfil no válido',
+    MetricGap.fewRomReps => 'Faltan reps',
+  };
+}
+
+/// Nombre del cuadrante ([hiX], [hiY] = por encima de la mediana) cuando un
+/// eje es de fuerza y el otro de velocidad; null en otro caso.
+String? quadrantName(CompareMetric x, CompareMetric y, bool hiX, bool hiY) {
+  final bool force, speed;
+  if (x.isForce && y.isSpeed) {
+    (force, speed) = (hiX, hiY);
+  } else if (x.isSpeed && y.isForce) {
+    (force, speed) = (hiY, hiX);
+  } else {
+    return null;
+  }
+  return switch ((force, speed)) {
+    (true, true) => 'Fuerte y rápido',
+    (false, true) => 'Rápido, poca fuerza',
+    (true, false) => 'Fuerte, lento',
+    (false, false) => 'A desarrollar',
+  };
+}

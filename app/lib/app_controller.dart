@@ -983,18 +983,103 @@ class AppController extends ChangeNotifier {
 
   /// Perfil carga-velocidad de un deportista en un ejercicio, con los datos
   /// raros descartados y las marcas manuales aplicadas.
+  /// Con [until], solo los datos anteriores a esa fecha (para comparar con
+  /// el periodo anterior).
   LvAnalysis profileFor({
     required String playerId,
     required String exerciseId,
     DateTime? since,
+    DateTime? until,
   }) => analyzeLoadVelocity(
-    withValidRom(
-      repsFor(playerId: playerId, exerciseId: exerciseId, since: since),
-      romRefFor(playerId, exerciseId),
-    ),
+    withValidRom([
+      for (final r in repsFor(
+        playerId: playerId,
+        exerciseId: exerciseId,
+        since: since,
+      ))
+        if (until == null || r.time.isBefore(until)) r,
+    ], romRefFor(playerId, exerciseId)),
     settings.metric,
     marks: _profileMarks,
   );
+
+  /// Evolución semanal del 1RM de [playerId] en [exerciseId].
+  List<TrendPoint> oneRmTrendFor(String playerId, String exerciseId) =>
+      oneRmTrend(
+        withValidRom(
+          repsFor(playerId: playerId, exerciseId: exerciseId),
+          romRefFor(playerId, exerciseId),
+        ),
+        settings.metric,
+        exerciseById(exerciseId).mvt,
+        marks: _profileMarks,
+        windowDays: kDayRmWindowDays,
+      );
+
+  /// Rango normal (±%) del 1RM de [playerId] en [exerciseId]: cuánto se
+  /// desvían sus series de su propio perfil (el mismo que el 1RM del día).
+  /// Sin series suficientes, [kDayRmDefaultBand].
+  double rmBandFor(String playerId, String exerciseId) {
+    final rom = romRefFor(playerId, exerciseId);
+    final ref = dayRmReference(
+      repsFor(
+        playerId: playerId,
+        exerciseId: exerciseId,
+        since: clock().subtract(const Duration(days: kDayRmWindowDays)),
+      ),
+      settings.metric,
+      exerciseById(exerciseId).mvt,
+      marks: _profileMarks,
+      rom: rom,
+    );
+    return ref?.band ?? kDayRmDefaultBand;
+  }
+
+  /// Deportistas de la sesión activa (vacío si no hay sesión).
+  List<String> get sessionPlayerIds => activeSession?.playerIds ?? const [];
+
+  /// Última vez que [playerId] tiene datos en [exerciseId] (o en cualquier
+  /// ejercicio con [exerciseId] null).
+  DateTime? lastDataFor(String playerId, [String? exerciseId]) {
+    final setIds = {
+      for (final s in sets)
+        if (s.playerId == playerId &&
+            (exerciseId == null || s.exerciseId == exerciseId))
+          s.id,
+    };
+    return reps.lastWhereOrNull((r) => setIds.contains(r.setId))?.time;
+  }
+
+  /// Métrica [metric] de [playerId] en [exerciseId] para comparar
+  /// deportistas. [done] = resultado de [exercisesWithRepsByPlayer] (se pasa
+  /// para no recalcularlo en cada celda).
+  MetricValue compareMetric({
+    required String playerId,
+    required String exerciseId,
+    required CompareMetric metric,
+    required Map<String, Set<String>> done,
+    DateTime? since,
+    Map<(String, String), LvAnalysis>? cache,
+  }) {
+    final everDone = done[playerId]?.contains(exerciseId) ?? false;
+    LvAnalysis analysis() => everDone && metric != CompareMetric.rom
+        ? (cache ?? {}).putIfAbsent(
+            (playerId, exerciseId),
+            () => profileFor(
+              playerId: playerId,
+              exerciseId: exerciseId,
+              since: since,
+            ),
+          )
+        : const LvAnalysis([], null);
+    return compareMetricValue(
+      metric,
+      analysis: analysis(),
+      rom: everDone ? romRefFor(playerId, exerciseId) : null,
+      mvt: exerciseById(exerciseId).mvt,
+      everDone: everDone,
+    );
+  }
 
   Map<String, ProfileMark> get _profileMarks => {
     for (final s in sets)

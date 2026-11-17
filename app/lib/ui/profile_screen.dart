@@ -9,7 +9,11 @@ import '../app_controller.dart';
 import '../core/analysis.dart';
 import '../core/models.dart';
 import 'common.dart';
+import 'compare_view.dart';
+import 'player_picker.dart';
 import 'value_sheets.dart';
+
+const _tabular = [FontFeature.tabularFigures()];
 
 class ProfileScreen extends StatefulWidget {
   final AppController c;
@@ -33,6 +37,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
   late String? exerciseId = widget.initialExerciseId;
   late String period = widget.initialPeriod ?? '30 días';
 
+  /// true = comparar varios deportistas; false = perfil de uno.
+  bool compare = false;
+
+  /// Vistos hace poco (el primero, el último), para el carrusel.
+  final List<String> _recent = [];
+
+  void _select(String id) => setState(() {
+    playerId = id;
+    _recent
+      ..remove(id)
+      ..insert(0, id);
+    if (_recent.length > 8) _recent.removeLast();
+  });
+
   @override
   Widget build(BuildContext context) {
     final c = widget.c;
@@ -48,20 +66,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
             .toList();
         if (players.isEmpty) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Perfil carga-velocidad')),
+            appBar: AppBar(title: const Text('Perfil')),
             body: Center(
-              child: Text(
-                c.activePlayers.isEmpty
-                    ? 'Añade jugadores para ver su perfil.'
-                    : 'Aún no hay medidas. Registra alguna serie para ver el perfil.',
-                textAlign: TextAlign.center,
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  c.activePlayers.isEmpty
+                      ? 'Añade jugadores para ver su perfil.'
+                      : 'Aún no hay medidas. Registra alguna serie para ver el perfil.',
+                  textAlign: TextAlign.center,
+                ),
               ),
             ),
           );
         }
         playerId = players.any((p) => p.id == playerId)
             ? playerId
-            : players.first.id;
+            : (c.sessionPlayerIds.firstWhereOrNull(
+                    (id) => players.any((p) => p.id == id),
+                  ) ??
+                  players.first.id);
         final playerExercises = c.exercises
             .where((e) => done[playerId]!.contains(e.id))
             .toList();
@@ -72,88 +96,251 @@ class _ProfileScreenState extends State<ProfileScreen> {
               : playerExercises.first.id;
         }
         final ex = c.exerciseById(exerciseId!);
-        final since = sinceForPeriod(period);
-        final metric = c.settings.metric;
         final analysis = c.profileFor(
           playerId: playerId!,
           exerciseId: ex.id,
-          since: since,
+          since: sinceForPeriod(period),
         );
-        final points = analysis.points;
-        final profile = analysis.profile;
 
         return Scaffold(
-          appBar: AppBar(title: const Text('Perfil carga-velocidad')),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _addManual(context, c, playerId!, ex.id, profile),
-            icon: const Icon(Icons.add),
-            label: const Text('Punto manual'),
-          ),
-          body: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
-            children: [
-              Wrap(
-                spacing: 12,
-                runSpacing: 8,
-                children: [
-                  _drop('Jugador', playerId!, {
-                    for (final p in players) p.id: p.name,
-                  }, (v) => setState(() => playerId = v)),
-                  _drop('Ejercicio', ex.id, {
-                    for (final e in playerExercises) e.id: e.name,
-                  }, (v) => setState(() => exerciseId = v)),
-                  _drop('Periodo', period, {
-                    for (final k in kPeriods.keys) k: k,
-                  }, (v) => setState(() => period = v)),
-                ],
-              ),
-              const SizedBox(height: 16),
-              if (points.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 48),
-                  child: Center(
-                    child: Text(
-                      'Sin repeticiones asignadas en este periodo.',
-                      textAlign: TextAlign.center,
+          appBar: AppBar(
+            title: Text(compare ? 'Comparar' : 'Perfil'),
+            actions: [
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: SegmentedButton<bool>(
+                  key: const Key('profile-mode'),
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  segments: const [
+                    ButtonSegment(
+                      value: false,
+                      icon: Icon(Icons.person),
+                      tooltip: 'Un deportista',
                     ),
-                  ),
-                )
-              else ...[
-                SizedBox(
-                  height: 280,
-                  child: _Chart(
-                    points: points,
-                    profile: profile,
-                    mvt: ex.mvt,
-                    onTapPoint: (p) => _togglePoint(context, c, p),
-                  ),
+                    ButtonSegment(
+                      value: true,
+                      icon: Icon(Icons.groups),
+                      label: Text('Equipo'),
+                      tooltip: 'Comparar deportistas',
+                    ),
+                  ],
+                  selected: {compare},
+                  onSelectionChanged: (v) => setState(() => compare = v.first),
                 ),
-                const SizedBox(height: 8),
-                const _Legend(),
-                const SizedBox(height: 12),
-                if (profile == null)
-                  const Text(
-                    'Hacen falta al menos 2 cargas distintas (y que la velocidad baje con la carga) para trazar el perfil.',
-                    style: TextStyle(color: Colors.white60),
-                  )
-                else
-                  _Summary(
-                    profile: profile,
-                    mvt: ex.mvt,
-                    metricLabel: metric.label,
+              ),
+            ],
+          ),
+          floatingActionButton: compare
+              ? null
+              : FloatingActionButton.extended(
+                  onPressed: () => _addManual(
+                    context,
+                    c,
+                    playerId!,
+                    ex.id,
+                    analysis.profile,
                   ),
-                const SizedBox(height: 8),
-                _RomRow(c: c, playerId: playerId!, exerciseId: ex.id),
-                const SizedBox(height: 8),
-                Text(
-                  'Mejor repetición por carga '
-                  '(${analysis.used.length} de ${points.length} en el perfil)',
-                  style: Theme.of(context).textTheme.titleSmall,
+                  icon: const Icon(Icons.add),
+                  label: const Text('Punto manual'),
                 ),
-                const Text(
-                  'Toca un punto para quitarlo o volver a meterlo en el perfil.',
-                  style: TextStyle(color: Colors.white38, fontSize: 12),
-                ),
+          body: IndexedStack(
+            index: compare ? 1 : 0,
+            children: [
+              _individual(
+                context,
+                c,
+                players,
+                done,
+                playerExercises,
+                ex,
+                analysis,
+              ),
+              CompareView(
+                c: c,
+                period: period,
+                onPeriod: (v) => setState(() => period = v),
+                exerciseId: exerciseId,
+                onExercise: (id) => setState(() => exerciseId = id),
+                onOpenProfile: (pid, exId) {
+                  _select(pid);
+                  setState(() {
+                    exerciseId = exId;
+                    compare = false;
+                  });
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ------------------------------------------------------------ individual
+
+  Widget _individual(
+    BuildContext context,
+    AppController c,
+    List<Player> players,
+    Map<String, Set<String>> done,
+    List<Exercise> playerExercises,
+    Exercise ex,
+    LvAnalysis analysis,
+  ) {
+    final points = analysis.points;
+    final profile = analysis.profile;
+    final session = c.sessionPlayerIds;
+    final carousel = carouselPlayers(
+      all: players,
+      session: session,
+      recent: _recent,
+      selected: playerId!,
+    );
+
+    // Orden para pasar al siguiente deslizando: la sesión si el elegido
+    // está en ella; si no, todos.
+    final inSession = [
+      for (final id in session)
+        if (players.any((p) => p.id == id)) id,
+    ];
+    final order = inSession.contains(playerId)
+        ? inSession
+        : [for (final p in players) p.id];
+    void step(int d) {
+      final i = order.indexOf(playerId!);
+      if (i < 0 || order.length < 2) return;
+      _select(order[(i + d) % order.length]);
+    }
+
+    final prev = previousPeriod(period);
+    final prevProfile = prev == null
+        ? null
+        : c
+              .profileFor(
+                playerId: playerId!,
+                exerciseId: ex.id,
+                since: prev.$1,
+                until: prev.$2,
+              )
+              .profile;
+    final trend = c.oneRmTrendFor(playerId!, ex.id);
+
+    // En pantallas anchas, el contenido centrado y con ancho máximo.
+    final side = math.max(16.0, (MediaQuery.sizeOf(context).width - 1000) / 2);
+    return ListView(
+      key: const Key('profile-list'),
+      padding: EdgeInsets.fromLTRB(side, 8, side, 96),
+      children: [
+        PillRow(
+          key: const Key('player-carousel'),
+          children: [
+            for (final p in carousel)
+              Pill(
+                key: ValueKey('player-${p.id}'),
+                label: p.name,
+                avatar: initialsOf(p.name),
+                icon: session.contains(p.id) ? Icons.event_available : null,
+                selected: p.id == playerId,
+                onTap: () => _select(p.id),
+              ),
+            if (players.length > carousel.length || players.length > 4)
+              Pill(
+                key: const Key('player-all'),
+                label: 'Todos (${players.length})',
+                icon: Icons.search,
+                dashed: true,
+                onTap: () => _searchPlayer(context, c, players, done, ex),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ExercisePeriodBar(
+          exercises: [for (final e in playerExercises) (e.id, e.name)],
+          selected: ex.id,
+          onExercise: (id) => setState(() => exerciseId = id),
+          period: period,
+          periods: kPeriods.keys.toList(),
+          onPeriod: (v) => setState(() => period = v),
+        ),
+        const SizedBox(height: 16),
+        GestureDetector(
+          key: const Key('profile-hero'),
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragEnd: (d) {
+            final v = d.primaryVelocity ?? 0;
+            if (v.abs() > 250) step(v < 0 ? 1 : -1);
+          },
+          child: _Hero(
+            analysis: analysis,
+            mvt: ex.mvt,
+            prevProfile: prevProfile,
+            prevLabel: previousPeriodLabel(period),
+            band: c.rmBandFor(playerId!, ex.id),
+            trend: trend,
+            position: order.length > 1
+                ? '${order.indexOf(playerId!) + 1}/${order.length}'
+                : null,
+            onPrev: () => step(-1),
+            onNext: () => step(1),
+          ),
+        ),
+        const SizedBox(height: 16),
+        if (points.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 48),
+            child: Center(
+              child: Text(
+                'Sin repeticiones en este periodo.',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          )
+        else ...[
+          SizedBox(
+            height: 260,
+            child: _Chart(
+              points: points,
+              profile: profile,
+              prevProfile: prevProfile,
+              mvt: ex.mvt,
+              onTapPoint: (p) => _togglePoint(context, c, p),
+            ),
+          ),
+          const SizedBox(height: 8),
+          _Legend(showPrevious: prevProfile != null && profile != null),
+          if (profile != null) ...[
+            const SizedBox(height: 16),
+            _LoadTable(profile: profile, mvt: ex.mvt),
+            const SizedBox(height: 4),
+            Text(
+              '1RM a ${c.settings.metric.label} = ${v2(ex.mvt)} m/s '
+              '(ajústalo en Ajustes › Ejercicios).',
+              style: const TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ],
+        ],
+        const SizedBox(height: 12),
+        const Divider(height: 1),
+        _RomRow(c: c, playerId: playerId!, exerciseId: ex.id),
+        if (points.isNotEmpty)
+          Theme(
+            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              key: const Key('points-tile'),
+              tilePadding: EdgeInsets.zero,
+              leading: const Icon(Icons.scatter_plot_outlined, size: 20),
+              title: Text(
+                '${points.length} cargas · '
+                '${points.length - analysis.used.length} fuera del perfil',
+              ),
+              subtitle: const Text(
+                'Toca una para quitarla o volver a meterla.',
+                style: TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+              children: [
                 for (final p in points)
                   _PointTile(
                     point: p,
@@ -162,11 +349,55 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     onAuto: () => c.setProfileMark(p.setId!, null),
                   ),
               ],
-            ],
+            ),
           ),
-        );
-      },
+      ],
     );
+  }
+
+  Future<void> _searchPlayer(
+    BuildContext context,
+    AppController c,
+    List<Player> players,
+    Map<String, Set<String>> done,
+    Exercise ex,
+  ) async {
+    final session = c.sessionPlayerIds.toSet();
+    final fmt = DateFormat('d MMM', 'es');
+    final since = sinceForPeriod(period);
+    final entries = [
+      for (final p in players)
+        () {
+          final has = done[p.id]?.contains(ex.id) ?? false;
+          final last = c.lastDataFor(p.id, has ? ex.id : null);
+          final rm = has
+              ? c
+                    .profileFor(playerId: p.id, exerciseId: ex.id, since: since)
+                    .profile
+                    ?.estimated1Rm(ex.mvt)
+              : null;
+          return PickerEntry(
+            p,
+            highlighted: has,
+            inSession: session.contains(p.id),
+            subtitle: [
+              if (!has)
+                'Sin datos en ${ex.name}'
+              else if (rm != null && rm.isFinite && rm > 0)
+                '1RM ${kg(rm.roundToDouble())} kg'
+              else
+                'Sin perfil en $period',
+              if (last != null) 'último: ${fmt.format(last)}',
+            ].join(' · '),
+          );
+        }(),
+    ];
+    final id = await showPlayerSearchSheet(
+      context,
+      entries: entries,
+      selectedId: playerId,
+    );
+    if (id != null) _select(id);
   }
 
   /// Si el punto cuenta, se excluye; si no cuenta, se incluye a mano.
@@ -188,32 +419,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             : p.status == LvPointStatus.forced
             ? ProfileMark.include
             : null,
-      ),
-    );
-  }
-
-  Widget _drop(
-    String label,
-    String value,
-    Map<String, String> items,
-    ValueChanged<String> onChanged,
-  ) {
-    return SizedBox(
-      width: 170,
-      child: DropdownButtonFormField<String>(
-        key: ValueKey(value),
-        initialValue: value,
-        isExpanded: true,
-        decoration: InputDecoration(
-          labelText: label,
-          isDense: true,
-          border: const OutlineInputBorder(),
-        ),
-        items: [
-          for (final e in items.entries)
-            DropdownMenuItem(value: e.key, child: Text(e.value)),
-        ],
-        onChanged: (v) => v == null ? null : onChanged(v),
       ),
     );
   }
@@ -242,88 +447,456 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 }
 
-class _Summary extends StatelessWidget {
-  final LvProfile profile;
+// ------------------------------------------------------------ cifras
+
+/// Tarjeta principal: 1RM grande, cambio respecto al periodo anterior,
+/// evolución y cifras secundarias.
+class _Hero extends StatelessWidget {
+  final LvAnalysis analysis;
   final double mvt;
-  final String metricLabel;
-  const _Summary({
-    required this.profile,
+  final LvProfile? prevProfile;
+  final String prevLabel;
+
+  /// Rango normal (±%) del 1RM de la persona: por debajo, el cambio es ruido.
+  final double band;
+  final List<TrendPoint> trend;
+
+  /// "4/7" en el orden que se recorre deslizando o con las flechas.
+  final String? position;
+  final VoidCallback onPrev, onNext;
+
+  const _Hero({
+    required this.analysis,
     required this.mvt,
-    required this.metricLabel,
+    required this.prevProfile,
+    required this.prevLabel,
+    required this.band,
+    required this.trend,
+    required this.position,
+    required this.onPrev,
+    required this.onNext,
   });
 
   @override
   Widget build(BuildContext context) {
-    final rm = profile.estimated1Rm(mvt);
-    Widget cell(String v, String l) => Expanded(
+    final profile = analysis.profile;
+    final rm = profile?.estimated1Rm(mvt);
+    final valid = rm != null && rm.isFinite && rm > 0;
+    final prevRm = prevProfile?.estimated1Rm(mvt);
+    final delta = valid && prevRm != null && prevRm.isFinite && prevRm > 0
+        ? rm - prevRm
+        : null;
+    final loads = analysis.used.length;
+
+    Widget stat(String value, String label, {Widget? lead}) => Expanded(
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            v,
-            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+          Row(
+            children: [
+              if (lead != null) ...[lead, const SizedBox(width: 4)],
+              Flexible(
+                child: Text(
+                  value,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: _tabular,
+                  ),
+                ),
+              ),
+            ],
           ),
-          Text(l, style: const TextStyle(color: Colors.white60, fontSize: 12)),
+          Text(
+            label,
+            style: const TextStyle(fontSize: 11, color: Colors.white54),
+          ),
         ],
       ),
     );
-    return Column(
-      children: [
-        Row(
-          children: [
-            cell('${kg(rm)} kg', '1RM estimado'),
-            cell(profile.r2.toStringAsFixed(2), 'R²'),
-            cell('${v2(profile.velocityAt(0))} m/s', 'V a carga 0'),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 8,
-          runSpacing: 6,
-          children: [
-            for (final pct in [50, 60, 70, 80, 90])
-              Chip(
-                label: Text(
-                  '$pct % → ${kg(profile.loadForPercent(pct.toDouble(), mvt))} kg · '
-                  '${v2(profile.velocityAt(profile.loadForPercent(pct.toDouble(), mvt)))}',
+
+    final reliable =
+        profile != null &&
+        loads >= kDayRmMinLoads &&
+        profile.r2 >= kCompareMinR2;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '1RM estimado',
+                style: TextStyle(color: Colors.white60, fontSize: 13),
+              ),
+              const Spacer(),
+              if (position != null) ...[
+                IconButton(
+                  key: const Key('player-prev'),
+                  tooltip: 'Anterior',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: onPrev,
+                ),
+                Text(
+                  position!,
+                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                ),
+                IconButton(
+                  key: const Key('player-next'),
+                  tooltip: 'Siguiente',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: onNext,
+                ),
+              ],
+            ],
+          ),
+          if (!valid)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                analysis.points.isEmpty
+                    ? 'Sin datos en este periodo.'
+                    : loads < 2
+                    ? 'Hace falta al menos otra carga distinta para trazar el perfil.'
+                    : 'Perfil no válido: la velocidad no baja con la carga.',
+                style: const TextStyle(color: Colors.white70),
+              ),
+            )
+          else ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  kg(rm.roundToDouble()),
+                  key: const Key('hero-1rm'),
+                  style: const TextStyle(
+                    fontSize: 48,
+                    height: 1.1,
+                    fontWeight: FontWeight.w800,
+                    fontFeatures: _tabular,
+                  ),
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(left: 4, bottom: 8),
+                  child: Text(
+                    'kg',
+                    style: TextStyle(fontSize: 16, color: Colors.white60),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                if (trendIsMeaningful(trend))
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 260),
+                        child: SizedBox(
+                          height: 44,
+                          child: _Sparkline(trend: trend),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  const Spacer(),
+              ],
+            ),
+            if (delta != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: _DeltaBadge(
+                  delta: delta,
+                  percent: rmChangePercent(rm, prevRm!),
+                  band: band,
+                  label: prevLabel,
                 ),
               ),
+            const SizedBox(height: 10),
+            const Divider(height: 1),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                stat('${v2(profile!.intercept)} m/s', 'V0 · vel. a carga 0'),
+                stat(
+                  '${(kGravity * profile.intercept * (-profile.intercept / profile.slope) / 4).round()} W',
+                  'Pmax · carga ${kg((-profile.intercept / profile.slope / 2).roundToDouble())} kg',
+                ),
+                stat(
+                  'R² ${profile.r2.toStringAsFixed(2)}',
+                  '$loads cargas',
+                  lead: Icon(
+                    reliable ? Icons.check_circle : Icons.warning_amber,
+                    size: 16,
+                    color: reliable ? kFresh : kWarning,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DeltaBadge extends StatelessWidget {
+  final double delta, percent, band;
+  final String label;
+  const _DeltaBadge({
+    required this.delta,
+    required this.percent,
+    required this.band,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final real = percent.abs() >= band;
+    final r = real ? delta.round() : 0;
+    final color = r > 0 ? kFresh : (r < 0 ? kStop : Colors.white54);
+    final signed =
+        '${delta >= 0 ? '+' : '−'}${kg(delta.abs().roundToDouble())}';
+    final text = r == 0
+        ? '≈ igual $label'
+        : '${r > 0 ? '+' : '−'}${r.abs()} kg $label';
+    return Tooltip(
+      message:
+          '$signed kg (${percent >= 0 ? '+' : '−'}${percent.abs().toStringAsFixed(1)} %). '
+          'Su rango normal es ±${band.toStringAsFixed(0)} %: '
+          '${real ? 'el cambio lo supera' : 'el cambio entra en lo normal'}.',
+      triggerMode: TooltipTriggerMode.tap,
+      child: Container(
+        key: const Key('hero-delta'),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(99),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              r > 0
+                  ? Icons.trending_up
+                  : (r < 0 ? Icons.trending_down : Icons.trending_flat),
+              size: 14,
+              color: color,
+            ),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                text,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: color, fontSize: 12),
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Evolución semanal del 1RM, sin ejes.
+class _Sparkline extends StatelessWidget {
+  final List<TrendPoint> trend;
+  const _Sparkline({required this.trend});
+
+  @override
+  Widget build(BuildContext context) {
+    final t0 = trend.first.end.millisecondsSinceEpoch;
+    final ys = trend.map((t) => t.oneRm);
+    final lo = ys.reduce(math.min), hi = ys.reduce(math.max);
+    final pad = math.max((hi - lo) * 0.15, 1.0);
+    return Tooltip(
+      message:
+          '1RM por semana (${trend.length} semanas): '
+          '${kg(trend.first.oneRm.roundToDouble())} → '
+          '${kg(trend.last.oneRm.roundToDouble())} kg',
+      child: LineChart(
+        LineChartData(
+          minY: lo - pad,
+          maxY: hi + pad,
+          lineTouchData: const LineTouchData(enabled: false),
+          gridData: const FlGridData(show: false),
+          borderData: FlBorderData(show: false),
+          titlesData: const FlTitlesData(show: false),
+          lineBarsData: [
+            LineChartBarData(
+              spots: [
+                for (final t in trend)
+                  FlSpot(
+                    (t.end.millisecondsSinceEpoch - t0) / 86400000,
+                    t.oneRm,
+                  ),
+              ],
+              isCurved: true,
+              preventCurveOverShooting: true,
+              color: Colors.lightBlueAccent,
+              barWidth: 2,
+              dotData: FlDotData(
+                show: true,
+                checkToShowDot: (s, bar) => s == bar.spots.last,
+                getDotPainter: (_, _, _, _) => FlDotCirclePainter(
+                  radius: 3,
+                  color: Colors.lightBlueAccent,
+                  strokeWidth: 0,
+                ),
+              ),
+              belowBarData: BarAreaData(
+                show: true,
+                color: Colors.lightBlueAccent.withValues(alpha: 0.1),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Carga y velocidad para cada % del 1RM, en una fila.
+class _LoadTable extends StatelessWidget {
+  final LvProfile profile;
+  final double mvt;
+  const _LoadTable({required this.profile, required this.mvt});
+
+  @override
+  Widget build(BuildContext context) {
+    const pcts = [50, 60, 70, 80, 90];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Cargas de trabajo',
+          style: TextStyle(color: Colors.white60, fontSize: 13),
+        ),
+        const SizedBox(height: 6),
+        Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.white12),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              for (var i = 0; i < pcts.length; i++)
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      border: i == 0
+                          ? null
+                          : const Border(
+                              left: BorderSide(color: Colors.white12),
+                            ),
+                    ),
+                    child: () {
+                      final load = profile.loadForPercent(
+                        pcts[i].toDouble(),
+                        mvt,
+                      );
+                      return Column(
+                        children: [
+                          Text(
+                            '${pcts[i]} %',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.white54,
+                            ),
+                          ),
+                          Text(
+                            kg(load.roundToDouble()),
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.w700,
+                              fontFeatures: _tabular,
+                            ),
+                          ),
+                          Text(
+                            v2(profile.velocityAt(load)),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.white54,
+                              fontFeatures: _tabular,
+                            ),
+                          ),
+                        ],
+                      );
+                    }(),
+                  ),
+                ),
+            ],
+          ),
+        ),
         const SizedBox(height: 4),
-        Text(
-          '1RM calculado a $metricLabel = ${v2(mvt)} m/s (ajústalo en Ajustes › Ejercicios).',
-          style: const TextStyle(color: Colors.white38, fontSize: 12),
+        const Text(
+          'kg · m/s esperada',
+          style: TextStyle(color: Colors.white38, fontSize: 11),
         ),
       ],
     );
   }
 }
 
+// ------------------------------------------------------------ gráfico
+
+const _zoneColors = [Color(0xFF5DCAA5), Color(0xFFEF9F27), Color(0xFFE24B4A)];
+
 class _Chart extends StatelessWidget {
   final List<LvPoint> points;
   final LvProfile? profile;
+  final LvProfile? prevProfile;
   final double mvt;
   final ValueChanged<LvPoint> onTapPoint;
   const _Chart({
     required this.points,
     required this.profile,
+    required this.prevProfile,
     required this.mvt,
     required this.onTapPoint,
   });
 
   @override
   Widget build(BuildContext context) {
+    final p = profile;
+    final rm = p?.estimated1Rm(mvt);
+    final valid = rm != null && rm.isFinite && rm > 0;
     final maxLoadPts = points.map((p) => p.loadKg).reduce(math.max);
-    final rm = profile?.estimated1Rm(mvt);
-    final maxX = (math.max(maxLoadPts, rm ?? 0) * 1.08).ceilToDouble();
+    final maxX = (math.max(maxLoadPts, valid ? rm : 0) * 1.08).ceilToDouble();
     final maxY =
         (math.max(
           points.map((p) => p.velocity).reduce(math.max),
-          profile?.velocityAt(0) ?? 0,
+          p?.velocityAt(0) ?? 0,
         ) *
         1.1);
     final newest = points.map((p) => p.time).max;
-    final pointsBar = profile != null ? 1 : 0;
+    final prev = prevProfile;
+    final prevRm = prev?.estimated1Rm(mvt);
+    final showPrev = valid && prevRm != null && prevRm.isFinite && prevRm > 0;
+    final pointsBar = (valid ? 1 : 0) + (showPrev ? 1 : 0);
+    final optimal = valid ? -p!.intercept / p.slope / 2 : null;
+
+    VerticalLine boundary(double x, String label, Color color) => VerticalLine(
+      x: x,
+      color: color.withValues(alpha: 0.5),
+      strokeWidth: 1,
+      dashArray: [4, 4],
+      label: VerticalLineLabel(
+        show: true,
+        alignment: Alignment.topLeft,
+        labelResolver: (_) => label,
+        style: TextStyle(fontSize: 10, color: color),
+      ),
+    );
 
     return LineChart(
       LineChartData(
@@ -342,8 +915,24 @@ class _Chart extends StatelessWidget {
         maxX: maxX,
         minY: 0,
         maxY: maxY,
-        gridData: const FlGridData(show: true),
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (_) =>
+              const FlLine(color: Colors.white10, strokeWidth: 1),
+        ),
         borderData: FlBorderData(show: false),
+        rangeAnnotations: RangeAnnotations(
+          verticalRangeAnnotations: [
+            if (valid)
+              for (var i = 0; i < kLoadZones.length; i++)
+                VerticalRangeAnnotation(
+                  x1: rm * kLoadZones[i].$1 / 100,
+                  x2: math.min(rm * kLoadZones[i].$2 / 100, maxX),
+                  color: _zoneColors[i].withValues(alpha: 0.07),
+                ),
+          ],
+        ),
         titlesData: FlTitlesData(
           topTitles: const AxisTitles(
             sideTitles: SideTitles(showTitles: false),
@@ -354,19 +943,39 @@ class _Chart extends StatelessWidget {
           bottomTitles: AxisTitles(
             axisNameWidget: const Text(
               'Carga (kg)',
-              style: TextStyle(fontSize: 11),
+              style: TextStyle(fontSize: 11, color: Colors.white54),
             ),
-            sideTitles: SideTitles(showTitles: true, reservedSize: 26),
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 26,
+              getTitlesWidget: (v, m) => _offGrid(v, m)
+                  ? const SizedBox.shrink()
+                  : Text(
+                      m.formattedValue,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Colors.white54,
+                      ),
+                    ),
+            ),
           ),
           leftTitles: AxisTitles(
-            axisNameWidget: const Text('m/s', style: TextStyle(fontSize: 11)),
+            axisNameWidget: const Text(
+              'm/s',
+              style: TextStyle(fontSize: 11, color: Colors.white54),
+            ),
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 36,
-              getTitlesWidget: (v, m) => Text(
-                v.toStringAsFixed(1),
-                style: const TextStyle(fontSize: 10),
-              ),
+              getTitlesWidget: (v, m) => _offGrid(v, m)
+                  ? const SizedBox.shrink()
+                  : Text(
+                      v.toStringAsFixed(1),
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Colors.white54,
+                      ),
+                    ),
             ),
           ),
         ),
@@ -383,13 +992,43 @@ class _Chart extends StatelessWidget {
               ),
             ),
           ],
+          verticalLines: [
+            if (valid) ...[
+              boundary(rm * 0.6, '60 %', _zoneColors[1]),
+              boundary(rm * 0.8, '80 %', _zoneColors[2]),
+            ],
+            if (optimal != null && optimal > 0 && optimal < maxX)
+              VerticalLine(
+                x: optimal,
+                color: Colors.lightBlueAccent.withValues(alpha: 0.35),
+                strokeWidth: 1,
+                dashArray: [2, 3],
+                label: VerticalLineLabel(
+                  show: true,
+                  alignment: Alignment.bottomRight,
+                  labelResolver: (_) => 'Pmax',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    color: Colors.lightBlueAccent,
+                  ),
+                ),
+              ),
+          ],
         ),
         lineBarsData: [
-          if (profile != null)
+          if (valid)
             LineChartBarData(
-              spots: [FlSpot(0, profile!.velocityAt(0)), FlSpot(rm!, mvt)],
+              spots: [FlSpot(0, p!.velocityAt(0)), FlSpot(rm, mvt)],
               color: Colors.lightBlueAccent,
-              barWidth: 2,
+              barWidth: 2.5,
+              dotData: const FlDotData(show: false),
+            ),
+          if (showPrev)
+            LineChartBarData(
+              spots: [FlSpot(0, prev!.velocityAt(0)), FlSpot(prevRm, mvt)],
+              color: Colors.white30,
+              barWidth: 1.5,
+              dashArray: [5, 4],
               dotData: const FlDotData(show: false),
             ),
           LineChartBarData(
@@ -427,6 +1066,13 @@ class _Chart extends StatelessWidget {
   }
 }
 
+/// El extremo del eje que no cae en la rejilla (p. ej. 1.53 junto a 1.5):
+/// no se rotula para que no se pisen.
+bool _offGrid(double v, TitleMeta m) {
+  final r = v / m.appliedInterval;
+  return (r - r.round()).abs() > 1e-6;
+}
+
 Color _statusColor(LvPointStatus s) => switch (s) {
   LvPointStatus.used || LvPointStatus.forced => Colors.amber,
   LvPointStatus.outlier => Colors.deepOrangeAccent,
@@ -434,11 +1080,13 @@ Color _statusColor(LvPointStatus s) => switch (s) {
 };
 
 class _Legend extends StatelessWidget {
-  const _Legend();
+  final bool showPrevious;
+  const _Legend({required this.showPrevious});
 
   @override
   Widget build(BuildContext context) {
-    Widget item(Color fill, Color stroke, String label) => Row(
+    const style = TextStyle(fontSize: 11, color: Colors.white60);
+    Widget dot(Color fill, Color stroke, String label) => Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
@@ -451,27 +1099,49 @@ class _Legend extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 4),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 11, color: Colors.white60),
+        Text(label, style: style),
+      ],
+    );
+    Widget swatch(Color c, String label) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 10,
+          decoration: BoxDecoration(
+            color: c.withValues(alpha: 0.35),
+            borderRadius: BorderRadius.circular(2),
+          ),
         ),
+        const SizedBox(width: 4),
+        Text(label, style: style),
       ],
     );
     return Wrap(
       spacing: 14,
       runSpacing: 4,
       children: [
-        item(Colors.amber, Colors.amber, 'En el perfil'),
-        item(
-          Colors.transparent,
-          _statusColor(LvPointStatus.outlier),
-          'Atípico (descartado)',
-        ),
-        item(
+        dot(Colors.amber, Colors.amber, 'En el perfil'),
+        dot(Colors.transparent, _statusColor(LvPointStatus.outlier), 'Atípico'),
+        dot(
           Colors.transparent,
           _statusColor(LvPointStatus.excluded),
-          'Excluido a mano',
+          'Excluido',
         ),
+        if (showPrevious)
+          const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 14,
+                child: Divider(color: Colors.white38, thickness: 1.5),
+              ),
+              SizedBox(width: 4),
+              Text('Periodo anterior', style: style),
+            ],
+          ),
+        for (var i = 0; i < kLoadZones.length; i++)
+          swatch(_zoneColors[i], kLoadZones[i].$3),
       ],
     );
   }
@@ -505,6 +1175,7 @@ class _PointTile extends StatelessWidget {
     final counts = p.status.counts;
     return ListTile(
       dense: true,
+      contentPadding: EdgeInsets.zero,
       onTap: onTap,
       leading: Icon(
         counts ? Icons.check_circle : Icons.remove_circle_outline,
@@ -554,13 +1225,13 @@ class _RomRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final ref = c.romRefFor(playerId, exerciseId);
     final text = ref == null
-        ? 'ROM de referencia: faltan repeticiones (mín. $kRomMinReps)'
-        : 'ROM de referencia: ${ref.target.round()} cm ± ${ref.band.round()} '
-              '(${ref.manual ? 'objetivo fijado a mano' : 'automático'})';
+        ? 'ROM: faltan repeticiones (mín. $kRomMinReps)'
+        : 'ROM ${ref.target.round()} ± ${ref.band.round()} cm '
+              '· ${ref.manual ? 'fijado a mano' : 'automático'}';
     return Row(
       children: [
-        const Icon(Icons.straighten, size: 18, color: Colors.white54),
-        const SizedBox(width: 8),
+        const Icon(Icons.straighten, size: 20, color: Colors.white54),
+        const SizedBox(width: 16),
         Expanded(
           child: Text(text, style: const TextStyle(color: Colors.white70)),
         ),
@@ -574,9 +1245,7 @@ class _RomRow extends StatelessWidget {
             );
             if (r != null) await c.setRomTarget(playerId, exerciseId, r.cm);
           },
-          child: Text(
-            ref?.manual ?? false ? 'Cambiar objetivo' : 'Fijar objetivo',
-          ),
+          child: Text(ref?.manual ?? false ? 'Cambiar' : 'Fijar objetivo'),
         ),
       ],
     );
