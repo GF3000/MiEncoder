@@ -5,6 +5,7 @@ import '../app_controller.dart';
 import '../core/analysis.dart';
 import '../core/models.dart';
 import 'common.dart';
+import 'load_picker.dart';
 
 /// Fondo rojo con papelera que aparece al deslizar para borrar.
 Widget swipeDeleteBackground() => Container(
@@ -22,9 +23,9 @@ Widget swipeDeleteBackground() => Container(
 );
 
 /// Una serie con su resumen. Toque = ver/corregir sus repeticiones (y
-/// cambiar su ejercicio); botón de la derecha = reasignar la serie entera;
-/// mantener pulsado = cambiar ejercicio o borrar; deslizar a la izquierda =
-/// borrar (con "Deshacer").
+/// cambiar su ejercicio o carga); botón de la derecha = reasignar la serie
+/// entera; mantener pulsado = cambiar ejercicio, carga o borrar; deslizar a
+/// la izquierda = borrar (con "Deshacer").
 class SetTile extends StatelessWidget {
   final AppController c;
   final WorkSet set;
@@ -86,6 +87,11 @@ class SetTile extends StatelessWidget {
                     onTap: () => Navigator.pop(ctx, 'exercise'),
                   ),
                   ListTile(
+                    leading: const Icon(Icons.scale_outlined),
+                    title: const Text('Cambiar carga'),
+                    onTap: () => Navigator.pop(ctx, 'load'),
+                  ),
+                  ListTile(
                     leading: const Icon(
                       Icons.delete_outline,
                       color: Colors.red,
@@ -103,6 +109,9 @@ class SetTile extends StatelessWidget {
           if (action == 'delete') await delete();
           if (action == 'exercise' && context.mounted) {
             await changeSetExercise(context, c, set.id);
+          }
+          if (action == 'load' && context.mounted) {
+            await changeSetLoad(context, c, set.id);
           }
         },
         leading: CircleAvatar(
@@ -270,6 +279,35 @@ Future<void> changeSetExercise(
   );
 }
 
+/// Elige otra carga para la serie [setId] y la aplica a todas sus
+/// repeticiones, con "Deshacer" en el [ScaffoldMessenger] de [context].
+Future<void> changeSetLoad(
+  BuildContext context,
+  AppController c,
+  String setId,
+) async {
+  final rs = c.repsOfSet(setId);
+  if (rs.isEmpty) return;
+  final messenger = ScaffoldMessenger.of(context);
+  final theme = Theme.of(context);
+  final v = await showLoadPicker(
+    context,
+    initial: rs.first.loadKg,
+    title: 'Carga de la serie',
+  );
+  if (v == null) return;
+  final before = await c.changeLoad(setId, v);
+  if (before == null || !messenger.mounted) return;
+  final now = c.repsOfSet(setId).firstOrNull?.loadKg ?? v;
+  showAppSnackOn(
+    messenger,
+    theme,
+    'Serie pasada a ${kg(now)} kg',
+    actionLabel: 'Deshacer',
+    onAction: () => c.undoChangeLoad(before),
+  );
+}
+
 /// Borra una repetición y ofrece deshacer en [messenger].
 Future<void> deleteRepWithUndo(
   ScaffoldMessengerState messenger,
@@ -333,6 +371,11 @@ Future<void> showSetDetail(
                         icon: const Icon(Icons.fitness_center, size: 18),
                         label: const Text('Ejercicio'),
                         onPressed: () => changeSetExercise(ctx, c, setId),
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.scale_outlined, size: 18),
+                        label: const Text('Carga'),
+                        onPressed: () => changeSetLoad(ctx, c, setId),
                       ),
                     ],
                   ),

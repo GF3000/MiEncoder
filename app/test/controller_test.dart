@@ -84,6 +84,19 @@ void main() {
       expect(fb.levels.last, FatigueLevel.stop);
     });
 
+    test('la carga admite discos fraccionales sin redondear', () {
+      c.setLoad(72.25);
+      expect(c.loadKg, 72.25);
+      c.setLoad(72.75);
+      expect(c.loadKg, 72.75);
+      c.onFrame(f(1.0));
+      expect(c.reps.last.loadKg, 72.75);
+      c.setLoad(1000);
+      expect(c.loadKg, 999);
+      c.setLoad(-5);
+      expect(c.loadKg, 0);
+    });
+
     test('cambiar la carga abre serie nueva al instante', () {
       c.onFrame(f(1.0));
       c.setLoad(60);
@@ -383,6 +396,93 @@ void main() {
         expect(c.setById(setId)!.exerciseId, 'squat');
       },
     );
+  });
+
+  group('Cambiar la carga de una serie', () {
+    // Serie de Ana a 60 kg con dos reps, ya cerrada (del historial).
+    Future<(String, String)> historySet() async {
+      final ana = await c.addPlayer('Ana');
+      c.setActive(ana.id);
+      c.setLoad(60);
+      c.onFrame(f(1.0));
+      c.onFrame(f(0.9));
+      final setId = c.reps.last.setId;
+      c.forceNewSet();
+      return (ana.id, setId);
+    }
+
+    test('cambia todas las reps y persiste', () async {
+      final (_, setId) = await historySet();
+      expect(await c.changeLoad(setId, 72.25), isNotNull);
+      expect(c.repsOfSet(setId).map((r) => r.loadKg), [72.25, 72.25]);
+
+      final c2 = await build();
+      expect(c2.repsOfSet(setId).map((r) => r.loadKg), [72.25, 72.25]);
+    });
+
+    test('la serie del historial no cambia la carga seleccionada', () async {
+      final (_, setId) = await historySet();
+      await c.changeLoad(setId, 80);
+      expect(c.loadKg, 60);
+    });
+
+    test('la serie en vivo cambia el selector y sigue abierta', () async {
+      final ana = await c.addPlayer('Ana');
+      c.setActive(ana.id);
+      c.setLoad(60);
+      c.onFrame(f(1.0));
+      final setId = c.reps.last.setId;
+      await c.changeLoad(setId, 65);
+      expect(c.loadKg, 65);
+      c.onFrame(f(0.95));
+      expect(c.reps.last.setId, setId);
+      expect(c.reps.last.loadKg, 65);
+      expect(c.lastLive!.indexInSet, 2);
+    });
+
+    test(
+      'en vivo no pisa una carga que ya se había cambiado en el selector',
+      () async {
+        final ana = await c.addPlayer('Ana');
+        c.setActive(ana.id);
+        c.setLoad(60);
+        c.onFrame(f(1.0));
+        final setId = c.reps.last.setId;
+        c.setLoad(70);
+        await c.changeLoad(setId, 62.5);
+        expect(c.loadKg, 70);
+      },
+    );
+
+    test('quita la marca de perfil y deshacer la devuelve', () async {
+      final (_, setId) = await historySet();
+      c.setProfileMark(setId, ProfileMark.exclude);
+      final before = await c.changeLoad(setId, 80);
+      expect(c.setById(setId)!.profileMark, isNull);
+      await c.undoChangeLoad(before!);
+      expect(c.setById(setId)!.profileMark, ProfileMark.exclude);
+      expect(c.repsOfSet(setId).map((r) => r.loadKg), [60, 60]);
+    });
+
+    test('deshacer en vivo incluye las reps hechas después', () async {
+      final ana = await c.addPlayer('Ana');
+      c.setActive(ana.id);
+      c.setLoad(60);
+      c.onFrame(f(1.0));
+      final setId = c.reps.last.setId;
+      final before = await c.changeLoad(setId, 65);
+      c.onFrame(f(0.95));
+      await c.undoChangeLoad(before!);
+      expect(c.repsOfSet(setId).map((r) => r.loadKg), [60, 60]);
+      expect(c.loadKg, 60);
+    });
+
+    test('sin cambios: misma carga o serie inexistente', () async {
+      final (_, setId) = await historySet();
+      expect(await c.changeLoad(setId, 60), isNull);
+      expect(await c.changeLoad('nope', 80), isNull);
+      expect(c.repsOfSet(setId).map((r) => r.loadKg), [60, 60]);
+    });
   });
 
   test('deshacer borra la última rep y la serie si queda vacía', () async {

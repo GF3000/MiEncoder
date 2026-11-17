@@ -509,7 +509,52 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> _replaceSet(WorkSet s, List<Rep> setReps) async {
+  /// Corrige la carga de una serie entera (todas sus repeticiones). No la
+  /// fusiona con otras. Si es la serie abierta del deportista activo, cambia
+  /// también la carga seleccionada para que la siguiente repetición siga en
+  /// ella. Devuelve cómo estaba, para deshacer con [undoChangeLoad]; null si
+  /// no cambió nada.
+  Future<DeletedData?> changeLoad(String setId, double kg) async {
+    final s = setById(setId);
+    if (s == null) return null;
+    final load = _normLoad(kg);
+    final rs = repsOfSet(setId);
+    if (rs.isEmpty || rs.every((r) => r.loadKg == load)) return null;
+    final before = DeletedData([s], rs);
+    await _replaceSet(s.withoutProfileMark(), [
+      for (final r in rs) r.withLoad(load),
+    ], fromLoad: rs.first.loadKg);
+    return before;
+  }
+
+  /// Devuelve la serie a la carga (y marca de perfil) de antes de
+  /// [changeLoad]. Parte de su estado actual: conserva lo que haya cambiado
+  /// después; las repeticiones nuevas toman la carga anterior de la serie.
+  Future<void> undoChangeLoad(DeletedData before) async {
+    final oldLoad = {for (final r in before.reps) r.id: r.loadKg};
+    for (final old in before.sets) {
+      final now = setById(old.id);
+      if (now == null) continue; // borrada mientras tanto
+      final fallback = before.reps
+          .where((r) => r.setId == old.id)
+          .firstOrNull
+          ?.loadKg;
+      final current = repsOfSet(old.id);
+      if (fallback == null || current.isEmpty) continue;
+      await _replaceSet(now.withProfileMark(old.profileMark), [
+        for (final r in current) r.withLoad(oldLoad[r.id] ?? fallback),
+      ], fromLoad: current.first.loadKg);
+    }
+  }
+
+  /// Sustituye una serie y sus reps. Si es la serie en vivo, el selector de
+  /// ejercicio la sigue; el de carga solo si seguía en [fromLoad] (la carga
+  /// que tenía la serie antes del cambio).
+  Future<void> _replaceSet(
+    WorkSet s,
+    List<Rep> setReps, {
+    double? fromLoad,
+  }) async {
     final i = sets.indexWhere((x) => x.id == s.id);
     if (i < 0) return;
     sets[i] = s;
@@ -520,8 +565,14 @@ class AppController extends ChangeNotifier {
     await repo.saveSetWithReps(s, setReps);
     final live =
         s.playerId == activePlayerId && _openSet[_key(s.playerId)] == s.id;
-    if (live && exerciseId != s.exerciseId) {
+    final newLoad = setReps.firstOrNull?.loadKg;
+    final syncLoad = fromLoad != null && newLoad != null && loadKg == fromLoad;
+    if (live && (exerciseId != s.exerciseId || syncLoad)) {
       exerciseId = s.exerciseId;
+      if (syncLoad) {
+        loadKg = newLoad;
+        _loadByPlayer[_key(activePlayerId)] = loadKg;
+      }
       _saveSession();
     }
     _refreshLive();
@@ -600,8 +651,13 @@ class AppController extends ChangeNotifier {
     lastLive = last == null ? null : _liveFor(last);
   }
 
+  /// Carga válida: 0–999 kg, a la centésima. Así caben los discos
+  /// fraccionales (72,25 kg) sin redondear a 72,3 y se limpia el ruido de
+  /// coma flotante de sumar pasos (0,1 + 0,2).
+  static double _normLoad(double kg) => (kg.clamp(0, 999) * 100).round() / 100;
+
   void setLoad(double kg) {
-    loadKg = (kg.clamp(0, 999) * 10).round() / 10;
+    loadKg = _normLoad(kg);
     _loadByPlayer[_key(activePlayerId)] = loadKg;
     _saveSession();
     notifyListeners();

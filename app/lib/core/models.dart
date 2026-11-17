@@ -118,7 +118,7 @@ class Rep {
 
   double velocity(VelocityMetric m) => m == VelocityMetric.mpv ? mpv : mv;
 
-  Rep _copy({String? setId, String? exerciseId}) => Rep(
+  Rep _copy({String? setId, String? exerciseId, double? loadKg}) => Rep(
     id: id,
     setId: setId ?? this.setId,
     time: time,
@@ -127,13 +127,15 @@ class Rep {
     mpv: mpv,
     vmax: vmax,
     vmaxTruncated: vmaxTruncated,
-    loadKg: loadKg,
+    loadKg: loadKg ?? this.loadKg,
     exerciseId: exerciseId ?? this.exerciseId,
   );
 
   Rep inSet(String newSetId) => _copy(setId: newSetId);
 
   Rep withExercise(String exerciseId) => _copy(exerciseId: exerciseId);
+
+  Rep withLoad(double loadKg) => _copy(loadKg: loadKg);
 
   /// Potencia media aproximada (W) = masa * g * velocidad media.
   double get meanPowerW => loadKg * 9.81 * mv;
@@ -215,6 +217,10 @@ class WorkSet {
   /// el perfil del ejercicio anterior.
   WorkSet withExercise(String exerciseId) =>
       _copy(exerciseId: exerciseId, profileMark: () => null);
+
+  /// Copia sin marca de perfil (p. ej. al corregir la carga: se decidió
+  /// mirando el punto con la carga anterior).
+  WorkSet withoutProfileMark() => _copy(profileMark: () => null);
 
   Map<String, Object?> toJson() => {
     'id': id,

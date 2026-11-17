@@ -124,14 +124,25 @@ void main() {
     });
 
     test('pesado: baja', () {
-      final r = a(100, 115); // 87 % → 77,5 % = 89,1 → tope −10 % = 90
+      final r = a(100, 115); // 87 % → 77,5 % = 89,1 → 90
       expect(r.kind, LoadAdviceKind.down);
       expect(r.targetLoad, 90);
     });
 
-    test('no cambia más de un 10 % de golpe', () {
-      final r = a(60, 120); // 50 % → ideal 93 kg, tope 66
-      expect(r.targetLoad, 65);
+    test('no cambia más de un 15 % del 1RM de golpe', () {
+      final r = a(60, 120); // 50 % → ideal 93 kg, tope 60 + 18 = 78
+      expect(r.targetLoad, 77.5);
+    });
+
+    test('el tope va con el 1RM, no con la carga: empezar ligero no frena', () {
+      final r = a(40, 120); // 33 % → tope 40 + 18 = 58 (antes 44)
+      expect(r.targetLoad, 57.5);
+    });
+
+    test('al bajar, el tope también es un 15 % del 1RM', () {
+      final r = a(100, 80); // 125 % → ideal 62 kg, tope 100 − 12 = 88
+      expect(r.kind, LoadAdviceKind.down);
+      expect(r.targetLoad, 87.5);
     });
 
     test('fuera del rango siempre cambia al menos un paso', () {
@@ -260,7 +271,8 @@ void main() {
       expect(a.generic, isFalse);
       expect(a.kind, LoadAdviceKind.up);
       expect(a.percent, closeTo(66.7, 1.5));
-      expect(a.targetLoad, 87.5); // tope +10 %
+      // Centro del rango (77,5 % de ≈ 120 = 93), dentro del tope (+18).
+      expect(a.targetLoad, 92.5);
       final (slow, fast) = c.velocityZoneFor(setId)!;
       expect(v(80), greaterThan(fast)); // demasiado rápido para el objetivo
       expect(slow, lessThan(fast));

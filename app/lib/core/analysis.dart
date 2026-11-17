@@ -601,9 +601,11 @@ List<double> runningMax(List<double> values) {
 
 // ------------------------------------------------------------ consejo de carga
 
-/// Cambio máximo (%) que se recomienda de una serie a la siguiente: si el
-/// objetivo queda lejos, se llega en varios pasos y se re-evalúa cada serie.
-const double kAdviceMaxChangePercent = 10;
+/// Cambio máximo de carga de una serie a la siguiente, en % del 1RM del
+/// día (no de la carga actual, para que empezar ligero no frene la
+/// subida): si el objetivo queda lejos, se llega en varios pasos y se
+/// re-evalúa cada serie.
+const double kAdviceMaxChangePercent = 15;
 
 enum LoadAdviceKind { up, keep, down }
 
@@ -640,7 +642,7 @@ class LoadAdvice {
 /// Consejo de carga: si [load] es el [LoadAdvice.percent] % de [dayRm] y
 /// está dentro de [target], mantener; si no, ir hacia el centro del rango,
 /// redondeando a [step] y sin cambiar más de [kAdviceMaxChangePercent] %
-/// (siempre al menos un [step]).
+/// de [dayRm] (siempre al menos un [step]).
 LoadAdvice? loadAdvice({
   required double load,
   required double dayRm,
@@ -661,7 +663,7 @@ LoadAdvice? loadAdvice({
     );
   }
   final s = step > 0 ? step : 2.5;
-  final cap = load * kAdviceMaxChangePercent / 100;
+  final cap = dayRm * kAdviceMaxChangePercent / 100;
   final ideal = (target.mid / 100 * dayRm).clamp(load - cap, load + cap);
   var next = (ideal / s).round() * s;
   final up = pct < target.min;
