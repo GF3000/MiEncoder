@@ -8,6 +8,7 @@ import 'package:miencoder/core/frame_parser.dart';
 import 'package:miencoder/main.dart';
 import 'package:miencoder/services/encoder.dart';
 import 'package:miencoder/services/repository.dart';
+import 'package:miencoder/ui/profile_screen.dart';
 
 import 'controller_test.dart' show SilentFeedback;
 
@@ -88,6 +89,30 @@ void main() {
       await tester.pump();
       expect(c.activePlayerId, isNull);
       await tester.pump(const Duration(seconds: 1));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('girar la pantalla no recrea las pestañas', (tester) async {
+      tester.view.physicalSize = const Size(393, 873);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(MiEncoderApp(controller: c));
+      await tester.pump();
+
+      await tester.tap(find.text('Perfil'));
+      await tester.pumpAndSettle();
+      expect(find.byType(NavigationBar), findsOneWidget);
+      final before = tester.state(find.byType(ProfileScreen));
+
+      tester.view.physicalSize = const Size(873, 393); // a horizontal
+      await tester.pumpAndSettle();
+      expect(find.byType(NavigationRail), findsOneWidget);
+      expect(tester.state(find.byType(ProfileScreen)), same(before));
+
+      tester.view.physicalSize = const Size(393, 873); // y de vuelta
+      await tester.pumpAndSettle();
+      expect(find.byType(NavigationBar), findsOneWidget);
+      expect(tester.state(find.byType(ProfileScreen)), same(before));
       expect(tester.takeException(), isNull);
     });
   });

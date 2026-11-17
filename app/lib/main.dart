@@ -105,6 +105,10 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int index = 0;
 
+  /// Mantiene vivas las pestañas al girar: el IndexedStack cambia de sitio en
+  /// el árbol (Scaffold.body ↔ Row) y sin clave Flutter recrearía su estado.
+  final _pagesKey = GlobalKey();
+
   /// Día para el que ya se preguntó (no repetir la pregunta el mismo día).
   DateTime? _askedOn;
 
@@ -160,7 +164,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     ];
     final size = MediaQuery.sizeOf(context);
     final landscape = size.width > size.height * 1.2;
-    final body = IndexedStack(index: index, children: pages);
+    final body = IndexedStack(key: _pagesKey, index: index, children: pages);
     if (landscape) {
       // En horizontal la altura es lo escaso: navegación en una columna lateral.
       return Scaffold(
